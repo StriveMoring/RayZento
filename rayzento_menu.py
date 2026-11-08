@@ -425,7 +425,7 @@ def run():
                 register_command, uninstall)
     while True:
         try:
-            action = choose(f"RayZento {vps.VERSION}", MAIN, "退出")
+            action = choose(f"RayZento {vps.VERSION}\n管理命令：rayzento（非 root 用户：sudo rayzento）", MAIN, "退出")
             if action == 0:
                 return
             result = operation(handlers[action - 1])

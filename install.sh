@@ -83,9 +83,10 @@ main() {
     rm -rf -- "$work"
     trap - EXIT
     if [[ -t 1 ]] && ( : </dev/tty ) 2>/dev/null; then
+        printf '安装完成，正在打开数字管理菜单。\n'
         exec "${admin[@]}" /usr/local/bin/rayzento menu </dev/tty
     fi
-    printf '安装完成。登录 SSH 终端后运行 sudo rayzento 打开菜单。\n'
+    printf '安装完成。当前没有交互式终端；登录 SSH 终端后运行 rayzento（非 root 用户：sudo rayzento）打开菜单。\n'
 }
 
 main "$@"
