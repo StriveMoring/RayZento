@@ -52,8 +52,8 @@ jobs:
           assert len(commands) == 2
           subprocess.run(['apt-get', 'update'], check=True)
           subprocess.run(['apt-get', 'install', '-y', '--no-install-recommends', 'wget', 'ca-certificates'], check=True)
-          for command in (commands[1], commands[0]):
-              if command == commands[0]:
+          for command in sorted(commands, key=lambda item: 'curl ' in item):
+              if 'curl ' in command:
                   subprocess.run(['apt-get', 'install', '-y', '--no-install-recommends', 'curl'], check=True)
               result = subprocess.run(['bash', '-c', command], text=True, capture_output=True, timeout=180)
               print(result.stdout)
