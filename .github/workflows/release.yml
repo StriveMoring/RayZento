@@ -78,10 +78,20 @@ jobs:
           import json
           import socket
           import subprocess
+          import sys
+          import traceback
           import rayzento_firewall as firewall
 
+          def report_error(kind, error, tb):
+              text = ''.join(traceback.format_exception(kind, error, tb))
+              print('::error::' + text.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A'))
+          sys.excepthook = report_error
+
           def command(*args, data=None):
-              return subprocess.check_output(args, input=data)
+              result = subprocess.run(args, input=data, capture_output=True)
+              if result.returncode:
+                  raise RuntimeError(args[0] + ': ' + result.stderr.decode(errors='replace'))
+              return result.stdout
 
           command('ip', 'link', 'set', 'lo', 'up')
           tcp = socket.socket()
