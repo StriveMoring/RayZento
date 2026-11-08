@@ -35,6 +35,28 @@ jobs:
           ./dist/rayzento profiles
           cd dist
           sha256sum -c rayzento.sha256
+      - name: Verify README bootstrap without preinstalled curl
+        run: |
+          if command -v curl >/dev/null 2>&1; then
+            apt-get remove -y curl
+          fi
+          python3 -B - <<'PY'
+          from pathlib import Path
+          import re
+          import subprocess
+
+          if Path('/proc/1/comm').read_text().strip() == 'systemd':
+              raise SystemExit('This check must run only in the disposable CI container.')
+          assert subprocess.run(['bash', '-c', 'command -v curl'], capture_output=True).returncode != 0
+          command = re.fullmatch(r'```bash\n(.*?)\n```\n?', Path('README.md').read_text(), re.S).group(1)
+          result = subprocess.run(['bash', '-c', command], text=True, capture_output=True, timeout=180)
+          print(result.stdout)
+          print(result.stderr)
+          subprocess.run(['curl', '--version'], check=True)
+          assert result.returncode != 0, 'A container must not proceed to systemd installation.'
+          assert '需要实际运行 systemd' in result.stderr, 'Download/bootstrap failed before the expected container guard.'
+          print('PASS: README installed curl, downloaded the installer over HTTPS, then safely refused non-systemd CI.')
+          PY
   release:
     needs: verify-linux
     runs-on: ubuntu-24.04

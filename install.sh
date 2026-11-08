@@ -9,7 +9,7 @@ fail() {
 install_dependencies() {
     local package
     local -a missing=()
-    for package in python3 ca-certificates iproute2 openssl procps kmod mount util-linux qrencode; do
+    for package in curl ca-certificates python3 iproute2 openssl procps kmod mount util-linux qrencode; do
         if [[ "$(dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null || true)" != installed ]]; then
             missing+=("$package")
         fi
@@ -58,6 +58,7 @@ main() {
         command -v sudo >/dev/null || fail '需要 sudo 或 root。'
         admin=(sudo)
     fi
+    install_dependencies "${admin[@]}"
     umask 077
     work=$(mktemp -d)
     trap "$(printf 'rm -rf -- %q' "$work")" EXIT
@@ -75,7 +76,6 @@ main() {
         fail 'SHA-256 校验记录格式错误。'
     (cd "$work" && printf '%s  rayzento\n' "$digest" | sha256sum --strict -c -) ||
         fail '发布文件的 SHA-256 校验失败。'
-    install_dependencies "${admin[@]}"
     version=$(python3 -I "$work/rayzento" --version)
     [[ $version == "RayZento ${tag#v}" ]] || fail "下载的版本与标签 $tag 不符。"
     python3 -I "$work/rayzento" doctor

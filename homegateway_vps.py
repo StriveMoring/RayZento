@@ -30,7 +30,7 @@ import rayzento_compat as compatibility
 ROOT = Path("/var/lib/homegateway-vps")
 OPT = Path("/opt/homegateway-vps")
 UNITS = Path("/etc/systemd/system")
-VERSION = "2.0.1"
+VERSION = "2.0.2"
 SPECS = {
     "xray": ("XTLS/Xray-core", "homegateway-xray.service"),
     "sing-box": ("SagerNet/sing-box", "homegateway-sing-box.service"),
