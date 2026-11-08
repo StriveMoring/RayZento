@@ -174,7 +174,7 @@ jobs:
           import rayzento_provision as provision
 
           # A disposable sleep process tests real systemd/Proc inspection; it is not a proxy core test.
-          with tempfile.TemporaryDirectory(prefix='rayzento-ci-', dir='/opt') as opt, tempfile.TemporaryDirectory(prefix='rayzento-ci-', dir='/var/lib') as state:
+          with tempfile.TemporaryDirectory(prefix='rayzento-ci-opt-', dir='/var/lib') as opt, tempfile.TemporaryDirectory(prefix='rayzento-ci-state-', dir='/var/lib') as state:
               core.OPT = Path(opt)
               core.ROOT = Path(state)
               core.ORDER = ('sing-box',)
