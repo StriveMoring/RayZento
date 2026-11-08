@@ -30,7 +30,7 @@ import rayzento_compat as compatibility
 ROOT = Path("/var/lib/rayzento")
 OPT = Path("/opt/rayzento")
 UNITS = Path("/etc/systemd/system")
-VERSION = "2.2.0"
+VERSION = "2.2.1"
 SPECS = {
     "xray": ("XTLS/Xray-core", "rayzento-xray.service"),
     "sing-box": ("SagerNet/sing-box", "rayzento-sing-box.service"),
@@ -307,6 +307,21 @@ class Service:
     origin: dict
 
 
+def validate_dropins(unit):
+    paths = sysprop(unit, "DropInPaths")
+    if not paths:
+        return
+    from rayzento_firewall import HOOK_TEXT
+    expected = UNITS / (unit + ".d") / "20-rayzento-firewall.conf"
+    if paths != str(expected):
+        raise Failure(f"{unit} 存在额外的 systemd 覆盖配置。")
+    if expected.parent.is_symlink() or expected.is_symlink() or not expected.is_file():
+        raise Failure(f"{unit} 的受管防火墙配置缺失或是符号链接。")
+    root_owned_path(expected)
+    if expected.read_text() != HOOK_TEXT:
+        raise Failure(f"{unit} 的受管防火墙配置内容已被修改。")
+
+
 def inspect(core, *, require_running=True):
     unit = SPECS[core][1]
     exe = OPT / core / core
@@ -314,8 +329,7 @@ def inspect(core, *, require_running=True):
     fragment = UNITS / unit
     if sysprop(unit, "LoadState") != "loaded" or sysprop(unit, "FragmentPath") != str(fragment):
         raise Failure(f"{unit} 不是本工具安装的服务。")
-    if sysprop(unit, "DropInPaths"):
-        raise Failure(f"{unit} 存在额外的 systemd 覆盖配置。")
+    validate_dropins(unit)
     active = sysprop(unit, "ActiveState") == "active"
     if (require_running and not active) or sysprop(unit, "Type") != "simple":
         raise Failure(f"{unit} 未处于预期的运行状态。")

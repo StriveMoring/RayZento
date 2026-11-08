@@ -159,6 +159,78 @@ jobs:
           udp.close()
           print('PASS: real kernel nftables and iptables open/close TCP+UDP; SSH rule and default policies preserved.')
           PY
+      - name: Verify service inspection with the real owned systemd drop-in
+        run: |
+          sudo python3 -B - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import shutil
+          import subprocess
+          import tempfile
+          import rayzento_core as core
+          import rayzento_firewall as firewall
+          import rayzento_nodes as nodes
+          import rayzento_provision as provision
+
+          # A disposable sleep process tests real systemd/Proc inspection; it is not a proxy core test.
+          with tempfile.TemporaryDirectory(prefix='rayzento-ci-', dir='/opt') as opt, tempfile.TemporaryDirectory(prefix='rayzento-ci-', dir='/var/lib') as state:
+              core.OPT = Path(opt)
+              core.ROOT = Path(state)
+              core.ORDER = ('sing-box',)
+              name = 'rayzento-ci-' + str(os.getpid()) + '.service'
+              core.SPECS = {'sing-box': ('SagerNet/sing-box', name)}
+              core.core_command = lambda kind, exe, config: [exe, '90']
+              core.installed_release = lambda kind, digest: {'tag': 'v1.0.0'}
+              folder = core.OPT / 'sing-box'
+              folder.mkdir(mode=0o700)
+              exe = folder / 'sing-box'
+              shutil.copyfile('/usr/bin/sleep', exe)
+              exe.chmod(0o755)
+              config = folder / 'server.json'
+              config.write_text('{}')
+              (folder / 'nodes.json').write_text(json.dumps([{'profile': 'anytls', 'client': {}}]))
+              unit = core.UNITS / name
+              dropdir = core.UNITS / (name + '.d')
+              hook = dropdir / '20-rayzento-firewall.conf'
+              foreign = dropdir / '99-unmanaged.conf'
+              assert not unit.exists() and not dropdir.exists()
+              try:
+                  unit.write_text(provision.unit_text('sing-box', exe, config))
+                  subprocess.run(['systemctl', 'daemon-reload'], check=True)
+                  subprocess.run(['systemctl', 'start', name], check=True)
+                  pid = core.sysprop(name, 'MainPID')
+                  firewall.configure_hooks()
+                  assert core.sysprop(name, 'DropInPaths') == str(hook)
+                  assert core.inspect('sing-box', require_running=False).pid == int(pid)
+                  assert len(nodes.all_nodes()) == 1
+                  hook.write_text(firewall.HOOK_TEXT + '# unexpected edit\n')
+                  try:
+                      core.inspect('sing-box', require_running=False)
+                  except core.Failure as error:
+                      assert '内容已被修改' in str(error)
+                  else:
+                      raise AssertionError('Modified owned hook was accepted.')
+                  hook.write_text(firewall.HOOK_TEXT)
+                  foreign.write_text('[Service]\nEnvironment=RAYZENTO_CI=1\n')
+                  subprocess.run(['systemctl', 'daemon-reload'], check=True)
+                  try:
+                      core.inspect('sing-box', require_running=False)
+                  except core.Failure as error:
+                      assert '额外' in str(error)
+                  else:
+                      raise AssertionError('Foreign drop-in was accepted.')
+                  foreign.unlink()
+                  subprocess.run(['systemctl', 'daemon-reload'], check=True)
+                  assert core.inspect('sing-box', require_running=False).pid == int(pid)
+                  print('PASS: real systemd owned hook accepted, node inventory readable, modified/foreign hooks rejected, no process restart.')
+              finally:
+                  subprocess.run(['systemctl', 'stop', name], check=False)
+                  unit.unlink(missing_ok=True)
+                  if dropdir.exists():
+                      shutil.rmtree(dropdir)
+                  subprocess.run(['systemctl', 'daemon-reload'], check=True)
+          PY
   release:
     needs: [verify-linux, verify-firewall]
     runs-on: ubuntu-24.04
