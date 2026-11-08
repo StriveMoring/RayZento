@@ -9,7 +9,7 @@ fail() {
 install_dependencies() {
     local package
     local -a missing=()
-    for package in curl ca-certificates python3 iproute2 openssl procps kmod mount util-linux qrencode; do
+    for package in curl ca-certificates python3 iproute2 openssl procps kmod mount util-linux nftables iptables; do
         if [[ "$(dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null || true)" != installed ]]; then
             missing+=("$package")
         fi
@@ -80,6 +80,7 @@ main() {
     [[ $version == "RayZento ${tag#v}" ]] || fail "下载的版本与标签 $tag 不符。"
     python3 -I "$work/rayzento" doctor
     "${admin[@]}" python3 -I "$work/rayzento" register --yes
+    "${admin[@]}" python3 -I /usr/local/bin/rayzento firewall sync
     rm -rf -- "$work"
     trap - EXIT
     if [[ -t 1 ]] && ( : </dev/tty ) 2>/dev/null; then

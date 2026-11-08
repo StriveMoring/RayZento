@@ -71,12 +71,14 @@ def operation(handler):
         print(f"操作失败：{error}", file=sys.stderr)
 
 
-def submenu(title, items, handlers):
+def submenu(title, items, handlers, *, return_after_success=False):
     while True:
         choice = choose(title, items)
         if not choice:
             return
-        operation(handlers[choice - 1])
+        result = operation(handlers[choice - 1])
+        if return_after_success and result is True:
+            return
 
 
 def settings():
@@ -131,7 +133,7 @@ def install_selected(names, options):
     selected = [n for n in names if n not in current]
     if not selected:
         print("所选协议已安装，可在节点管理中修改。")
-        return
+        return True
     options = {k: value for k, value in options.items() if k in selected}
     server = server_address()
     sni, cert, key = server, None, None
@@ -159,6 +161,8 @@ def install_selected(names, options):
     if not fresh:
         nodes.display()
         nodes.export()
+    print("安装完成，返回主菜单。")
+    return True
 
 
 def custom_install():
@@ -171,8 +175,7 @@ def custom_install():
             return
         if choice == len(profiles) + 1:
             if selected:
-                install_selected(list(selected), selected)
-                return
+                return install_selected(list(selected), selected)
             print("请先选择至少一个协议。")
             continue
         name = profiles[choice - 1]
@@ -184,14 +187,14 @@ def custom_install():
 
 def install_nodes():
     submenu("安装组合，选择预设后自动安装", (
-        "最小组合，Xray VLESS REALITY", "标准组合，Xray REALITY、TUIC、AnyTLS",
+        "最小组合，Xray VLESS REALITY", "标准组合，Xray REALITY、AnyTLS、TUIC",
         "完整组合，Xray 和 sing-box 的 10 种入站", "自选协议和端口",
     ), (
         lambda: install_selected(["vless-reality"], {}),
         lambda: install_selected(list(provision.PRESETS["standard"]), {}),
         lambda: install_selected(list(provision.PRESETS["full"]), {}),
         custom_install,
-    ))
+    ), return_after_success=True)
 
 
 def select_node():
@@ -225,7 +228,7 @@ def edit_node(action):
 
 def node_menu():
     vps.host_check()
-    submenu("节点资料与管理", ("显示全部链接和二维码", "导出客户端文件", "修改节点监听端口",
+    submenu("节点资料与管理", ("显示全部节点链接", "导出客户端文件", "修改节点监听端口",
                               "修改客户端公网入口", "删除节点"),
             (nodes.display, nodes.export, lambda: edit_node("port"), lambda: edit_node("endpoint"), lambda: edit_node("delete")))
 

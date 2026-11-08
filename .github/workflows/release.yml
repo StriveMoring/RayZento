@@ -63,8 +63,79 @@ jobs:
           subprocess.run(['curl', '--version'], check=True)
           print('PASS: both short commands downloaded the installer over HTTPS and safely refused non-systemd CI.')
           PY
+  verify-firewall:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install isolated firewall test tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends nftables iptables
+      - name: Verify kernel TCP and UDP filtering in disposable network namespace
+        run: |
+          sudo unshare --net python3 -B - <<'PY'
+          import json
+          import socket
+          import subprocess
+          import rayzento_firewall as firewall
+
+          def command(*args, data=None):
+              return subprocess.check_output(args, input=data)
+
+          command('ip', 'link', 'set', 'lo', 'up')
+          tcp = socket.socket()
+          tcp.bind(('127.0.0.1', 0))
+          tcp.listen(8)
+          udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+          udp.bind(('127.0.0.1', 0))
+          udp.settimeout(0.4)
+          ports = {('tcp', tcp.getsockname()[1]), ('udp', udp.getsockname()[1])}
+
+          def probe(expected):
+              try:
+                  connection = socket.create_connection(tcp.getsockname(), timeout=0.4)
+                  connection.close()
+                  connected = True
+              except OSError:
+                  connected = False
+              with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
+                  client.sendto(b'RayZento-firewall-test', udp.getsockname())
+              try:
+                  received = udp.recvfrom(100)[0] == b'RayZento-firewall-test'
+              except TimeoutError:
+                  received = False
+              assert (connected, received) == (expected, expected), (connected, received, expected)
+
+          command('nft', '-f', '-', data=b'table inet primary { chain input { type filter hook input priority 0; policy drop; ct state established,related accept; tcp dport 22 accept comment "ssh-keep"; } }\ntable ip secondary { chain input { type filter hook input priority 10; policy drop; ct state established,related accept; } }\n')
+          probe(False)
+          document = json.loads(command('nft', '-j', 'list', 'ruleset'))
+          firewall.apply_nftables(document, ports)
+          probe(True)
+          document = json.loads(command('nft', '-j', 'list', 'ruleset'))
+          firewall.apply_nftables(document, set())
+          probe(False)
+          assert b'ssh-keep' in command('nft', 'list', 'ruleset')
+          # This namespace was created solely by this test and contains no host rules.
+          command('nft', 'flush', 'ruleset')
+          command('iptables', '-P', 'INPUT', 'DROP')
+          command('iptables', '-A', 'INPUT', '-m', 'conntrack', '--ctstate', 'ESTABLISHED,RELATED', '-j', 'ACCEPT')
+          command('iptables', '-A', 'INPUT', '-p', 'tcp', '--dport', '22', '-j', 'ACCEPT')
+          probe(False)
+          lines = command('iptables', '-S', 'INPUT').decode().splitlines()
+          firewall.apply_iptables(lines, ports)
+          probe(True)
+          lines = command('iptables', '-S', 'INPUT').decode().splitlines()
+          firewall.apply_iptables(lines, set())
+          probe(False)
+          remaining = command('iptables', '-S', 'INPUT')
+          assert b'--dport 22 -j ACCEPT' in remaining and b'-P INPUT DROP' in remaining
+          tcp.close()
+          udp.close()
+          print('PASS: real kernel nftables and iptables open/close TCP+UDP; SSH rule and default policies preserved.')
+          PY
   release:
-    needs: verify-linux
+    needs: [verify-linux, verify-firewall]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

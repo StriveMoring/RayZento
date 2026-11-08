@@ -14,6 +14,7 @@ from urllib.parse import quote, urlencode
 import uuid
 
 import rayzento_core as vps
+import rayzento_firewall as firewall
 
 F = vps.Failure
 NAMES = {
@@ -35,9 +36,11 @@ HOST = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?")
 PRIVATE = ["0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
            "172.16.0.0/12", "192.168.0.0/16", "198.18.0.0/15", "224.0.0.0/3"]
 VIS = "xtls-rprx-vision"
+PROFILE_ORDER = ("vless-reality", "xhttp-reality", "xhttp-encrypted", "ws-encrypted", "xhttp-h3", "xhttp-h2",
+                 "mihomo-reality", "naive", "anytls", "anytls-reality", "tuic")
 PRESETS = {
-    "standard": ("vless-reality", "tuic", "anytls"),
-    "full": tuple(k for k in NAMES if k != "mihomo-reality"),
+    "standard": ("vless-reality", "anytls", "tuic"),
+    "full": tuple(k for k in PROFILE_ORDER if k != "mihomo-reality"),
 }
 
 
@@ -343,6 +346,7 @@ def activate(stage, reality_ready):
                 f.write(unit_text(core, target, config))
             installed.append(dest)
             dest.chmod(0o644)
+        firewall.sync()
         vps.command(["systemctl", "daemon-reload"])
         for core in cores:
             unit = vps.SPECS[core][1]
@@ -362,7 +366,7 @@ def activate(stage, reality_ready):
             else:
                 raise F(f"{unit} 未提供预期 TCP/UDP 监听。")
         vps.command(["systemctl", "enable", *[x.name for x in installed]])
-        print("服务已启动且监听就绪。防火墙没有自动开放；请核对需要开放的端口并从客户端验收。")
+        print("服务已启动且监听就绪，本机防火墙端口同步完成；云平台安全组需在服务商后台放行。")
     except BaseException:
         blocked = set()
         for dest in reversed(installed):
@@ -375,6 +379,7 @@ def activate(stage, reality_ready):
             if vps.SPECS[d.name][1] not in blocked:
                 shutil.rmtree(d)
         vps.command(["systemctl", "daemon-reload"])
+        firewall.sync()
         if blocked:
             raise F("初始化失败，以下单元未能自动清理，已保留对应文件：" + ", ".join(sorted(blocked)))
         raise

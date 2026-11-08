@@ -9,6 +9,7 @@ import socket
 import tempfile
 
 import rayzento_core as vps
+import rayzento_firewall as firewall
 
 HOOK = Path("/etc/letsencrypt/renewal-hooks/deploy/80-rayzento")
 LE = Path("/etc/letsencrypt")
@@ -115,15 +116,19 @@ def issue(hostname, public_ipv4):
     install_packages(["certbot"])
     name = "rz-" + hostname
     print("自动申请使用 Let's Encrypt HTTP-01。DNS 必须指向本机，安全组需放行 TCP 80。")
-    vps.command(["certbot", "certonly", "--standalone", "--non-interactive", "--agree-tos",
-                 "--register-unsafely-without-email", "--preferred-challenges", "http",
-                 "--cert-name", name, "-d", hostname], timeout=240)
-    with vps.lock():
-        folder = vps.ROOT / "certificates"
-        folder.mkdir(mode=0o700, exist_ok=True)
-        data = {"name": name, "domain": hostname}
-        cert, key = copy_cert(data)
-        vps.atomic_json(folder / f"{name}.json", data)
+    firewall.sync(extra={("tcp", 80)})
+    try:
+        vps.command(["certbot", "certonly", "--standalone", "--non-interactive", "--agree-tos",
+                     "--register-unsafely-without-email", "--preferred-challenges", "http",
+                     "--cert-name", name, "-d", hostname], timeout=240)
+        with vps.lock():
+            folder = vps.ROOT / "certificates"
+            folder.mkdir(mode=0o700, exist_ok=True)
+            data = {"name": name, "domain": hostname}
+            cert, key = copy_cert(data)
+            vps.atomic_json(folder / f"{name}.json", data)
+    finally:
+        firewall.sync()
     ensure_renewal()
     return cert, key
 

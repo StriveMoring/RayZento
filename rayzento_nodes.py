@@ -1,20 +1,25 @@
-"""Node inventory, client exports and QR codes."""
+"""Node inventory, copyable links and client exports."""
 import base64
 import contextlib
 import ipaddress
 import json
-import shutil
 from urllib.parse import quote, urlencode, urlsplit
 
 import rayzento_core as vps
+
+
+def ordered(nodes):
+    from rayzento_provision import PROFILE_ORDER
+    rank = {name: index for index, name in enumerate(PROFILE_ORDER)}
+    return sorted(nodes, key=lambda node: rank.get(node["profile"], len(rank)))
 
 
 def records(ports, clients, vless_links):
     links = {urlsplit(link).username: link for link in vless_links}
     if len(ports) != len(clients):
         raise vps.Failure("节点元数据数量不一致。")
-    return [{"profile": profile, "client": client, "link": links.get(client.get("uuid"), "")}
-            for profile, client in zip(ports, clients)]
+    return ordered([{"profile": profile, "client": client, "link": links.get(client.get("uuid"), "")}
+                    for profile, client in zip(ports, clients)])
 
 
 def load(core):
@@ -39,7 +44,7 @@ def all_nodes():
             if node["profile"] not in provision.NAMES or provision.NAMES[node["profile"]][0] != core:
                 raise vps.Failure("节点不属于对应的受管核心。")
             nodes.append(node)
-    return nodes
+    return ordered(nodes)
 
 
 def public_host(server):
@@ -107,7 +112,7 @@ def text_file(path, content):
 
 
 def export(nodes=None, *, locked=False):
-    nodes = all_nodes() if nodes is None else nodes
+    nodes = ordered(all_nodes() if nodes is None else nodes)
     with contextlib.nullcontext() if locked else vps.lock():
         folder = vps.ROOT / "exports"
         folder.mkdir(mode=0o700, exist_ok=True)
@@ -135,20 +140,13 @@ def export(nodes=None, *, locked=False):
         return folder
 
 
-def display(nodes=None, *, qr=True):
-    nodes = all_nodes() if nodes is None else nodes
+def display(nodes=None):
+    nodes = ordered(all_nodes() if nodes is None else nodes)
     for node in nodes:
         c = node["client"]
         print(f"\n{node['profile']} · {c['name']} · {c['server']}:{c['port']}")
         uri = link(node)
         print(uri)
-        if qr and shutil.which("qrencode"):
-            result = vps.command(["qrencode", "-t", "UTF8", "-m", "2"], input=uri.encode(), check=False)
-            art = result.stdout.decode(errors="replace")
-            if result.returncode == 0 and max(map(len, art.splitlines()), default=0) <= shutil.get_terminal_size().columns:
-                print(art)
-            else:
-                print("终端宽度不足或链接较长，请复制上方完整链接。")
         if node["profile"] in ("anytls-reality", "naive"):
             print("该协议的分享 URI 各客户端实现不同，优先参照导出 JSON 的完整参数。")
     if not nodes:

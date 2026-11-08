@@ -30,7 +30,7 @@ import rayzento_compat as compatibility
 ROOT = Path("/var/lib/rayzento")
 OPT = Path("/opt/rayzento")
 UNITS = Path("/etc/systemd/system")
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 SPECS = {
     "xray": ("XTLS/Xray-core", "rayzento-xray.service"),
     "sing-box": ("SagerNet/sing-box", "rayzento-sing-box.service"),
@@ -587,8 +587,11 @@ def main(argv=None):
     sub.add_parser("audit", help="只读取此 VPS 的服务归属和端口")
     certificate = sub.add_parser("certificate", help="证书状态、续期和自动部署")
     certificate.add_argument("certificate_action", choices=("status", "renew", "dry-run", "deploy"))
-    node = sub.add_parser("nodes", help="节点链接、二维码和客户端导出")
+    node = sub.add_parser("nodes", help="节点链接和客户端导出")
     node.add_argument("node_action", choices=("show", "export"))
+    firewall = sub.add_parser("firewall", help="同步受管节点端口，不更改其他防火墙规则")
+    firewall.add_argument("firewall_action", choices=("sync",))
+    firewall.add_argument("--runtime-only", action="store_true", help="由服务启动钩子调用，不修改服务文件")
     tuning.add_commands(sub.add_parser("tune", help="管理 Swap、Journald 和 BBR/FQ"))
     for name in ("plan", "upgrade"):
         a = sub.add_parser(name, help="核对目标版本" if name == "plan" else "校验、备份和替换指定核心")
@@ -627,6 +630,10 @@ def main(argv=None):
             print(f"{c}: {obj['tag_name']} {obj['html_url']}")
         return
     host_check()
+    if args.action == "firewall":
+        import rayzento_firewall
+        rayzento_firewall.sync(hooks=not args.runtime_only)
+        return
     if args.action == "certificate":
         import rayzento_certificates as certificates
         actions = {"status": certificates.status, "renew": certificates.renew,

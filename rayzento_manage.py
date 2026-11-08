@@ -13,6 +13,7 @@ import uuid
 import rayzento_core as vps
 import rayzento_provision as provision
 import rayzento_nodes as nodes
+import rayzento_firewall as firewall
 
 CHANGE_ID = re.compile(r"change-[0-9]{19}-[0-9a-f]{8}")
 REMOVED_ID = re.compile(r"removed-[0-9]{19}-[0-9a-f]{8}")
@@ -132,6 +133,7 @@ def commit(core, config, inventory, reason, *, expected_config=None, expected_no
         try:
             vps.atomic_json(svc.config, config)
             vps.atomic_json(vps.OPT / core / "nodes.json", inventory)
+            firewall.sync()
             if config_inbounds(core, config):
                 first_node = not config_inbounds(core, before_config)
                 if data["active"] or first_node:
@@ -166,6 +168,7 @@ def restore_change(folder, data):
     vps.command(vps.config_check(core, svc.exe, folder / "restore.json"), timeout=35)
     vps.atomic_json(svc.config, data["before_config"])
     vps.atomic_json(vps.OPT / core / "nodes.json", data["before_nodes"])
+    firewall.sync()
     if data["active"]:
         vps.boot(svc.unit, svc.exe, config_ports(core, data["before_config"]), data["binary_sha"])
     else:
@@ -240,6 +243,7 @@ def remove_core(core):
             shutil.move(str(vps.OPT / core), folder / core)
             unit.unlink()
             vps.command(["systemctl", "daemon-reload"])
+            firewall.sync()
             data["state"] = "removed"
             vps.atomic_json(folder / "removal.json", data)
         except BaseException:
@@ -267,6 +271,7 @@ def restore_removal(folder, data):
     unit.write_text(data["unit"])
     unit.chmod(0o644)
     vps.command(["systemctl", "daemon-reload"])
+    firewall.sync()
     vps.command(["systemctl", "enable" if data["enabled"] else "disable", unit_name])
     if data["active"]:
         cfg = load_config(core)
@@ -312,6 +317,7 @@ def remove_manager():
         if target.is_symlink() or target.resolve() != Path(sys.argv[0]).resolve():
             raise vps.Failure("请从已注册的 rayzento 执行卸载管理器。")
         vps.root_owned_path(target)
+        firewall.sync(clear=True)
         hook = certificates.HOOK
         if hook.exists() or hook.is_symlink():
             if hook.is_symlink() or "# Managed by RayZento" not in hook.read_text():

@@ -21,6 +21,7 @@ MODULES = (
     "rayzento_manage.py",
     "rayzento_certificates.py",
     "rayzento_update.py",
+    "rayzento_firewall.py",
 )
 
 
