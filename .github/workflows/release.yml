@@ -1,0 +1,59 @@
+name: Release RayZento
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  verify-linux:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['debian:12', 'debian:13', 'ubuntu:22.04', 'ubuntu:24.04', 'ubuntu:26.04']
+    container: ${{ matrix.image }}
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends python3 git ca-certificates
+      - name: Checkout release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check syntax and build with distribution Python
+        run: |
+          python3 --version
+          python3 -B -m compileall -q .
+          bash -n install.sh
+          python3 -B build_release.py --tag "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
+          ./dist/rayzento --version
+          ./dist/rayzento profiles
+          cd dist
+          sha256sum -c rayzento.sha256
+  release:
+    needs: verify-linux
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build release assets
+        run: |
+          python3 -B build_release.py --tag "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
+          bash -n dist/install.sh
+          ./dist/rayzento --version
+          ./dist/rayzento profiles
+          cd dist
+          sha256sum -c rayzento.sha256
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/install.sh dist/rayzento dist/rayzento.sha256 --verify-tag --generate-notes

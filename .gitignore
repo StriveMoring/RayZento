@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+/dist/
+/rayzento
+/*.zip
+/isolated-results.json
+/.env*
+/secrets/
+*.pem
+*.key
