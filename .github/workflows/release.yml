@@ -117,7 +117,22 @@ jobs:
                   received = False
               assert (connected, received) == (expected, expected), (connected, received, expected)
 
-          command('nft', '-f', '-', data=b'table inet primary { chain input { type filter hook input priority 0; policy drop; ct state established,related accept; tcp dport 22 accept comment "ssh-keep"; } }\ntable ip secondary { chain input { type filter hook input priority 10; policy drop; ct state established,related accept; } }\n')
+          base_rules = '''
+          table inet primary {
+              chain input {
+                  type filter hook input priority 0; policy drop;
+                  ct state established,related accept
+                  tcp dport 22 accept comment "ssh-keep"
+              }
+          }
+          table ip secondary {
+              chain input {
+                  type filter hook input priority 10; policy drop;
+                  ct state established,related accept
+              }
+          }
+          '''
+          command('nft', '-f', '-', data=base_rules.encode())
           probe(False)
           document = json.loads(command('nft', '-j', 'list', 'ruleset'))
           firewall.apply_nftables(document, ports)
