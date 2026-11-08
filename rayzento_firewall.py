@@ -19,7 +19,14 @@ ExecStartPre=+/usr/local/bin/rayzento firewall sync --runtime-only
 
 
 def run(args, **kwargs):
-    return vps.command(args, timeout=40, env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"}, **kwargs)
+    check = kwargs.pop("check", True)
+    result = vps.command(args, check=False, timeout=40,
+                         env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"}, **kwargs)
+    if check and result.returncode:
+        # Only firewall commands reach this helper; their diagnostics contain port rules, not node secrets.
+        detail = result.stderr.decode(errors="replace").strip()[-1600:]
+        raise vps.Failure(f"{args[0]} 返回 {result.returncode}：{detail}")
+    return result
 
 
 def desired_ports():
