@@ -147,6 +147,12 @@ def apply_firewalld(ports):
             vps.atomic_json(state, owned)
 
 
+def nft_identifier(name):
+    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_./]*", name):
+        raise vps.Failure("nftables 表或链名称含非标准字符，未更改该防火墙。")
+    return name
+
+
 def nft_plan(document, ports):
     commands = []
     chains = [x["chain"] for x in document["nftables"] if "chain" in x and x["chain"].get("hook") == "input"
@@ -157,11 +163,11 @@ def nft_plan(document, ports):
             if not any((c["family"], c["table"], c["name"]) ==
                        (rule["family"], rule["table"], rule["chain"]) for c in chains):
                 raise vps.Failure("受管规则不在预期 INPUT 链。")
-            commands.append(f'delete rule {rule["family"]} {json.dumps(rule["table"])} {json.dumps(rule["chain"])} handle {int(rule["handle"])}')
+            commands.append(f'delete rule {rule["family"]} {nft_identifier(rule["table"])} {nft_identifier(rule["chain"])} handle {int(rule["handle"])}')
     for chain in chains:
         if chain.get("type") != "filter":
             raise vps.Failure("非标准 INPUT 链，未改动。")
-        prefix = f'insert rule {chain["family"]} {json.dumps(chain["table"])} {json.dumps(chain["name"])} '
+        prefix = f'insert rule {chain["family"]} {nft_identifier(chain["table"])} {nft_identifier(chain["name"])} '
         if chain["family"] == "inet":
             prefix += "meta nfproto ipv4 "
         for proto in ("tcp", "udp"):
