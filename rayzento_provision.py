@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Provision standalone HomeGateway VPS services."""
+"""Provision standalone RayZento VPS services."""
 import ipaddress
 import json
 import os
@@ -13,7 +13,7 @@ import time
 from urllib.parse import quote, urlencode
 import uuid
 
-import homegateway_vps as vps
+import rayzento_core as vps
 
 F = vps.Failure
 NAMES = {
@@ -180,7 +180,7 @@ def profiles(ports, server, sni, cover, bind, cert, key, binaries, generate_real
                 tls["alpn"] = n["alpn"] = ["h3"]
                 entry["congestion_control"] = n["congestion-controller"] = "bbr"
             if protocol == "naive":
-                auth["username"] = n["username"] = "hg-" + secrets.token_hex(4)
+                auth["username"] = n["username"] = "rz-" + secrets.token_hex(4)
                 n["client"] = "sing-box/Naive；不是 Xray VLESS，也不导入 Mihomo"
             if k == "anytls-reality":
                 pri, pub, sid = generate_reality(core, binaries[core])
@@ -194,7 +194,7 @@ def profiles(ports, server, sni, cover, bind, cert, key, binaries, generate_real
         else:
             pri, pub, sid = generate_reality(core, binaries[core])
             meta.append({"name": k, "type": "vless", "listen": bind, "port": port,
-                         "users": [{"username": "homegateway", "uuid": user, "flow": VIS}],
+                         "users": [{"username": "rayzento", "uuid": user, "flow": VIS}],
                          "reality-config": {"dest": cover + ":443", "private-key": pri, "short-id": [sid], "server-names": [cover]}})
             n.update(network="tcp", tls=True, flow=VIS, servername=cover, **{"client-fingerprint": "chrome", "reality-opts": {"public-key": pub, "short-id": sid}})
             clients.append(n)
@@ -223,7 +223,7 @@ def profiles(ports, server, sni, cover, bind, cert, key, binaries, generate_real
 def unit_text(core, target, config):
     cmd = " ".join(map(str, vps.core_command(core, target, config)))
     return f"""[Unit]
-Description=HomeGateway {core}
+Description=RayZento {core}
 Wants=network-online.target
 After=network-online.target
 

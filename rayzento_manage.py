@@ -10,8 +10,8 @@ import sys
 import time
 import uuid
 
-import homegateway_vps as vps
-import homegateway_provision as provision
+import rayzento_core as vps
+import rayzento_provision as provision
 import rayzento_nodes as nodes
 
 CHANGE_ID = re.compile(r"change-[0-9]{19}-[0-9a-f]{8}")

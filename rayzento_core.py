@@ -27,14 +27,14 @@ import zipfile
 
 import rayzento_compat as compatibility
 
-ROOT = Path("/var/lib/homegateway-vps")
-OPT = Path("/opt/homegateway-vps")
+ROOT = Path("/var/lib/rayzento")
+OPT = Path("/opt/rayzento")
 UNITS = Path("/etc/systemd/system")
-VERSION = "2.0.2"
+VERSION = "2.1.0"
 SPECS = {
-    "xray": ("XTLS/Xray-core", "homegateway-xray.service"),
-    "sing-box": ("SagerNet/sing-box", "homegateway-sing-box.service"),
-    "mihomo": ("MetaCubeX/mihomo", "homegateway-mihomo.service"),
+    "xray": ("XTLS/Xray-core", "rayzento-xray.service"),
+    "sing-box": ("SagerNet/sing-box", "rayzento-sing-box.service"),
+    "mihomo": ("MetaCubeX/mihomo", "rayzento-mihomo.service"),
 }
 ORDER = ("sing-box", "xray", "mihomo")
 TAG = re.compile(r"v?[0-9]{1,4}\.[0-9]{1,3}\.[0-9]{1,3}")
@@ -120,7 +120,7 @@ class HTTPSRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def fetch(url, cap, max_seconds=120):
-    request = urllib.request.Request(url, headers={"User-Agent": "HomeGateway-VPS-Upgrade/1"})
+    request = urllib.request.Request(url, headers={"User-Agent": "RayZento/2"})
     try:
         with urllib.request.build_opener(HTTPSRedirect()).open(request, timeout=25) as resp:
             chunks, total = [], 0
@@ -363,7 +363,7 @@ def copy_identity(src, dst):
 
 
 def stage_binary(svc, blob):
-    with tempfile.NamedTemporaryFile(prefix=".hg-candidate-", dir=svc.exe.parent, delete=False) as t:
+    with tempfile.NamedTemporaryFile(prefix=".rayzento-candidate-", dir=svc.exe.parent, delete=False) as t:
         stage = Path(t.name)
         t.write(blob)
         t.flush()
@@ -420,7 +420,7 @@ def restore(record, tx):
         return
     if now != record["after_sha"]:
         raise Failure("当前二进制不是该交易所安装的版本；不覆盖后续变更。")
-    with tempfile.NamedTemporaryFile(prefix=".hg-rollback-", dir=exe.parent, delete=False) as t:
+    with tempfile.NamedTemporaryFile(prefix=".rayzento-rollback-", dir=exe.parent, delete=False) as t:
         stage = Path(t.name)
     try:
         shutil.copyfile(source, stage)
@@ -518,7 +518,7 @@ def apply(targets, reality_ready, latest=()):
                 print(f"{svc.unit} 已用新核心启动，原监听已恢复。", flush=True)
             manifest["state"] = "local-verified"
             atomic_json(tx / "manifest.json", manifest)
-            print("本机监听验收通过。请从 v2rayN 和 HomeGateway 实测涉及的入站及公网出口。")
+            print("本机监听验收通过。请从 v2rayN 和 RayZento 实测涉及的入站及公网出口。")
             print(f"回滚命令：sudo rayzento rollback {txid}")
         except BaseException:
             if changed:
@@ -567,7 +567,7 @@ def tag_numbers(tag):
 
 
 def main(argv=None):
-    import homegateway_provision as provision
+    import rayzento_provision as provision
     import rayzento_menu as menu
     import rayzento_tune as tuning
 

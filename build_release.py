@@ -6,14 +6,14 @@ import re
 import json
 import zipfile
 
-from homegateway_vps import VERSION
+from rayzento_core import VERSION
 
 
 SOURCE = Path(__file__).resolve().parent
 MODULES = (
     "__main__.py",
-    "homegateway_provision.py",
-    "homegateway_vps.py",
+    "rayzento_provision.py",
+    "rayzento_core.py",
     "rayzento_compat.py",
     "rayzento_menu.py",
     "rayzento_tune.py",

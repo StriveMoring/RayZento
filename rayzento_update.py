@@ -9,7 +9,7 @@ import sys
 import tempfile
 import zipfile
 
-import homegateway_vps as vps
+import rayzento_core as vps
 
 REPOSITORY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*")
 COMMAND_PATH = Path("/usr/local/bin/rayzento")

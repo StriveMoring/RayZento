@@ -8,7 +8,7 @@ import shutil
 import socket
 import tempfile
 
-import homegateway_vps as vps
+import rayzento_core as vps
 
 HOOK = Path("/etc/letsencrypt/renewal-hooks/deploy/80-rayzento")
 LE = Path("/etc/letsencrypt")
@@ -57,7 +57,7 @@ def managed():
 
 
 def copy_cert(data):
-    import homegateway_provision as provision
+    import rayzento_provision as provision
     lineage = LE / "live" / data["name"]
     destination = vps.ROOT / "certificates" / data["name"]
     destination.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -94,7 +94,7 @@ def copy_cert(data):
 
 
 def issue(hostname, public_ipv4):
-    import homegateway_provision as provision
+    import rayzento_provision as provision
     hostname = domain(hostname)
     existing = next((c for c in managed() if c["domain"] == hostname), None)
     if existing:

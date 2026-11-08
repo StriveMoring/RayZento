@@ -7,8 +7,8 @@ import sys
 import tempfile
 import zipfile
 
-import homegateway_provision as provision
-import homegateway_vps as vps
+import rayzento_provision as provision
+import rayzento_core as vps
 import rayzento_certificates as certificates
 import rayzento_manage as manage
 import rayzento_nodes as nodes
@@ -382,7 +382,7 @@ def register_command(*, confirmed=False):
     vps.host_check()
     source = Path(sys.argv[0]).resolve(strict=True)
     target = COMMAND_PATH
-    required_members = {"__main__.py", "homegateway_vps.py", "homegateway_provision.py"}
+    required_members = {"__main__.py", "rayzento_menu.py", "rayzento-release.json"}
     with zipfile.ZipFile(source) as archive:
         if not required_members <= set(archive.namelist()):
             raise vps.Failure("请从发布包中的单文件 rayzento 运行注册。")

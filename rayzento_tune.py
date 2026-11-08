@@ -10,7 +10,7 @@ import tempfile
 import time
 import uuid
 
-import homegateway_vps as vps
+import rayzento_core as vps
 import rayzento_compat as compatibility
 
 MIB = 1024 * 1024

@@ -6,7 +6,7 @@ import json
 import shutil
 from urllib.parse import quote, urlencode, urlsplit
 
-import homegateway_vps as vps
+import rayzento_core as vps
 
 
 def records(ports, clients, vless_links):
@@ -29,7 +29,7 @@ def load(core):
 
 
 def all_nodes():
-    import homegateway_provision as provision
+    import rayzento_provision as provision
     nodes = []
     for core in vps.ORDER:
         if not (vps.OPT / core).exists():
