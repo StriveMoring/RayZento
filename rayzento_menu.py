@@ -188,7 +188,7 @@ def custom_install():
 def install_nodes():
     submenu("安装组合，选择预设后自动安装", (
         "最小组合，Xray VLESS REALITY", "标准组合，Xray REALITY、AnyTLS、TUIC",
-        "完整组合，Xray 和 sing-box 的 10 种入站", "自选协议和端口",
+        "完整组合，10 种入站、11 条节点（含 Naive H2/H3）", "自选协议和端口",
     ), (
         lambda: install_selected(["vless-reality"], {}),
         lambda: install_selected(list(provision.PRESETS["standard"]), {}),

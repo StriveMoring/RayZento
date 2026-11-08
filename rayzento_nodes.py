@@ -1,6 +1,7 @@
 """Node inventory, copyable links and client exports."""
 import base64
 import contextlib
+import copy
 import ipaddress
 import json
 from urllib.parse import quote, urlencode, urlsplit
@@ -12,6 +13,20 @@ def ordered(nodes):
     from rayzento_provision import PROFILE_ORDER
     rank = {name: index for index, name in enumerate(PROFILE_ORDER)}
     return sorted(nodes, key=lambda node: rank.get(node["profile"], len(rank)))
+
+
+def client_nodes(nodes):
+    result = []
+    for node in ordered(nodes):
+        if node["client"]["type"] != "naive" or "quic" in node["client"]:
+            result.append(node)
+            continue
+        # One Naive listener serves TCP/H2 and UDP/H3 with the same credentials.
+        for quic in (False, True):
+            variant = copy.deepcopy(node)
+            variant["client"].update(name="Naive H3" if quic else "Naive H2", quic=quic)
+            result.append(variant)
+    return result
 
 
 def records(ports, clients, vless_links):
@@ -102,7 +117,8 @@ def link(node):
         return f"anytls://{auth}@{endpoint}?{urlencode(query)}#{title}"
     if c["type"] == "naive":
         query = urlencode({"sni": c["sni"]})
-        return f"naive+https://{quote(c['username'], safe='')}:{auth}@{endpoint}?{query}#{title}"
+        scheme = "naive+quic" if c.get("quic") else "naive+https"
+        return f"{scheme}://{quote(c['username'], safe='')}:{auth}@{endpoint}?{query}#{title}"
     raise vps.Failure("未知客户端协议。")
 
 
@@ -112,7 +128,7 @@ def text_file(path, content):
 
 
 def export(nodes=None, *, locked=False):
-    nodes = ordered(all_nodes() if nodes is None else nodes)
+    nodes = client_nodes(all_nodes() if nodes is None else nodes)
     with contextlib.nullcontext() if locked else vps.lock():
         folder = vps.ROOT / "exports"
         folder.mkdir(mode=0o700, exist_ok=True)
@@ -141,7 +157,7 @@ def export(nodes=None, *, locked=False):
 
 
 def display(nodes=None):
-    nodes = ordered(all_nodes() if nodes is None else nodes)
+    nodes = client_nodes(all_nodes() if nodes is None else nodes)
     for node in nodes:
         c = node["client"]
         print(f"\n{node['profile']} · {c['name']} · {c['server']}:{c['port']}")

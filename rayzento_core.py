@@ -30,7 +30,7 @@ import rayzento_compat as compatibility
 ROOT = Path("/var/lib/rayzento")
 OPT = Path("/opt/rayzento")
 UNITS = Path("/etc/systemd/system")
-VERSION = "2.2.1"
+VERSION = "2.3.0"
 SPECS = {
     "xray": ("XTLS/Xray-core", "rayzento-xray.service"),
     "sing-box": ("SagerNet/sing-box", "rayzento-sing-box.service"),
@@ -598,7 +598,8 @@ def main(argv=None):
     activation.add_argument("candidate", metavar="FRESH-ID")
     activation.add_argument("--reality-client-ready", action="store_true")
     sub.add_parser("releases", help="只查询官方最新正式版；不会更新")
-    sub.add_parser("audit", help="只读取此 VPS 的服务归属和端口")
+    audit = sub.add_parser("audit", help="只读取此 VPS 的服务归属和端口")
+    audit.add_argument("--reality", action="store_true", help="脱敏检查 REALITY 目标、TLS 回落和近期错误，不修改服务")
     certificate = sub.add_parser("certificate", help="证书状态、续期和自动部署")
     certificate.add_argument("certificate_action", choices=("status", "renew", "dry-run", "deploy"))
     node = sub.add_parser("nodes", help="节点链接和客户端导出")
@@ -674,6 +675,10 @@ def main(argv=None):
         rollback(args.transaction)
         return
     if args.action == "audit":
+        if args.reality:
+            import rayzento_diagnostics
+            rayzento_diagnostics.reality()
+            return
         unsupported = False
         for c in ORDER:
             if sysprop(SPECS[c][1], "LoadState") == "not-found" and not (OPT / c).exists():
