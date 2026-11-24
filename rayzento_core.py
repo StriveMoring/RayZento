@@ -30,7 +30,7 @@ import rayzento_compat as compatibility
 ROOT = Path("/var/lib/rayzento")
 OPT = Path("/opt/rayzento")
 UNITS = Path("/etc/systemd/system")
-VERSION = "2.3.0"
+VERSION = "2.4.0"
 SPECS = {
     "xray": ("XTLS/Xray-core", "rayzento-xray.service"),
     "sing-box": ("SagerNet/sing-box", "rayzento-sing-box.service"),
@@ -607,6 +607,10 @@ def main(argv=None):
     firewall = sub.add_parser("firewall", help="同步受管节点端口，不更改其他防火墙规则")
     firewall.add_argument("firewall_action", choices=("sync",))
     firewall.add_argument("--runtime-only", action="store_true", help="由服务启动钩子调用，不修改服务文件")
+    warp = sub.add_parser("warp", help="全站 IPv4 WARP 接管与恢复")
+    warp.add_argument("warp_action", choices=("status", "on", "off", "repair", "sites", "watch-on", "watch-off", "watch-log", "monitor"))
+    warp.add_argument("--accept-cloudflare-terms", action="store_true", help="接受首次 wgcf 注册所需的 Cloudflare 使用条款")
+    warp.add_argument("--profile", type=Path, help="导入 VPS 上 root 独占的标准 WARP WireGuard 配置")
     tuning.add_commands(sub.add_parser("tune", help="管理 Swap、Journald 和 BBR/FQ"))
     for name in ("plan", "upgrade"):
         a = sub.add_parser(name, help="核对目标版本" if name == "plan" else "校验、备份和替换指定核心")
@@ -645,6 +649,11 @@ def main(argv=None):
             print(f"{c}: {obj['tag_name']} {obj['html_url']}")
         return
     host_check()
+    if args.action == "warp":
+        import rayzento_warp
+        rayzento_warp.run(args.warp_action, accept_terms=args.accept_cloudflare_terms,
+                          imported=args.profile.absolute() if args.profile else None)
+        return
     if args.action == "firewall":
         import rayzento_firewall
         rayzento_firewall.sync(hooks=not args.runtime_only)

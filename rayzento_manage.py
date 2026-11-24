@@ -229,6 +229,8 @@ def add_node(profile, server, cert=None, key=None, sni=None, port="auto"):
 def remove_core(core):
     with vps.lock():
         check_pending()
+        if (vps.ROOT / 'warp-full' / 'state.json').is_file():
+            raise vps.Failure('卸载前请先在 WARP 菜单恢复原出口，确保路由和回退状态一并收尾。')
         svc = vps.inspect(core, require_running=False)
         folder = vps.ROOT / f"removed-{time.time_ns():019d}-{uuid.uuid4().hex[:8]}"
         folder.mkdir(mode=0o700)

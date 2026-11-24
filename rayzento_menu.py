@@ -1,6 +1,7 @@
 """Numeric RayZento management menus."""
 import os
 import json
+from enum import Enum, auto
 from pathlib import Path
 import shutil
 import sys
@@ -15,19 +16,23 @@ import rayzento_nodes as nodes
 import rayzento_update as updates
 
 
-MAIN = (
-    "安装或添加节点", "节点资料与管理", "核心服务管理", "核心升级",
-    "小内存 VPS 优化", "证书申请与续期", "备份与回退", "更新 RayZento",
-    "检查 VPS 兼容性", "查看协议和预设", "注册 rayzento 管理命令", "卸载核心或全部节点",
-)
 COMMAND_PATH = Path("/usr/local/bin/rayzento")
 
 
-def choose(title, items, exit_text="返回"):
+class Navigation(Enum):
+    MAIN = auto()
+    EXIT = auto()
+
+
+def choose(title, items, exit_text="返回上一级", *, headings=None):
     while True:
         print(f"\n{title}")
         for number, item in enumerate(items, 1):
+            if headings and number in headings:
+                print(f"\n{headings[number]}")
             print(f"  {number}. {item}")
+        if headings:
+            print()
         print(f"  0. {exit_text}")
         answer = input("选择编号 > ").strip()
         if answer.isascii() and answer.isdecimal() and len(answer) <= 3:
@@ -71,14 +76,21 @@ def operation(handler):
         print(f"操作失败：{error}", file=sys.stderr)
 
 
-def submenu(title, items, handlers, *, return_after_success=False):
+def menu(title, *sections, main=False):
+    options = []
+    headings = {}
+    for heading, entries in sections:
+        if heading:
+            headings[len(options) + 1] = heading
+        options.extend(entries)
+    labels = [label for label, _ in options]
     while True:
-        choice = choose(title, items)
+        choice = choose(title, labels, "退出" if main else "返回上一级", headings=headings)
         if not choice:
             return
-        result = operation(handlers[choice - 1])
-        if return_after_success and result is True:
-            return
+        result = operation(options[choice - 1][1])
+        if result is Navigation.EXIT or (result is Navigation.MAIN and not main):
+            return result
 
 
 def settings():
@@ -132,8 +144,8 @@ def install_selected(names, options):
     current = {n["profile"] for n in nodes.all_nodes()}
     selected = [n for n in names if n not in current]
     if not selected:
-        print("所选协议已安装，可在节点管理中修改。")
-        return True
+        print("所选协议已安装。可返回「节点」查看链接或修改配置。")
+        return Navigation.MAIN
     options = {k: value for k, value in options.items() if k in selected}
     server = server_address()
     sni, cert, key = server, None, None
@@ -162,7 +174,7 @@ def install_selected(names, options):
         nodes.display()
         nodes.export()
     print("安装完成，返回主菜单。")
-    return True
+    return Navigation.MAIN
 
 
 def custom_install():
@@ -186,15 +198,11 @@ def custom_install():
 
 
 def install_nodes():
-    submenu("安装组合，选择预设后自动安装", (
-        "最小组合，Xray VLESS REALITY", "标准组合，Xray REALITY、AnyTLS、TUIC",
-        "完整组合，10 种入站、11 条节点（含 Naive H2/H3）", "自选协议和端口",
-    ), (
-        lambda: install_selected(["vless-reality"], {}),
-        lambda: install_selected(list(provision.PRESETS["standard"]), {}),
-        lambda: install_selected(list(provision.PRESETS["full"]), {}),
-        custom_install,
-    ), return_after_success=True)
+    return menu("节点 › 安装或添加节点", ("预设（使用默认参数）", (
+        ("最小组合 · Xray VLESS REALITY", lambda: install_selected(["vless-reality"], {})),
+        ("标准组合 · Xray REALITY、AnyTLS、TUIC", lambda: install_selected(list(provision.PRESETS["standard"]), {})),
+        ("完整组合 · 10 种入站、11 条节点（含 Naive H2/H3）", lambda: install_selected(list(provision.PRESETS["full"]), {})),
+    )), ("自定义", (("自选协议和端口", custom_install),)))
 
 
 def select_node():
@@ -227,10 +235,16 @@ def edit_node(action):
 
 
 def node_menu():
-    vps.host_check()
-    submenu("节点资料与管理", ("显示全部节点链接", "导出客户端文件", "修改节点监听端口",
-                              "修改客户端公网入口", "删除节点"),
-            (nodes.display, nodes.export, lambda: edit_node("port"), lambda: edit_node("endpoint"), lambda: edit_node("delete")))
+    return menu("节点", ("查看与安装", (
+        ("查看全部节点链接", lambda: execute(["nodes", "show"])),
+        ("导出客户端配置", lambda: execute(["nodes", "export"])),
+        ("安装或添加节点", install_nodes),
+        ("查看有哪些协议和安装组合", lambda: execute(["profiles"])),
+    )), ("修改已有节点", (
+        ("修改服务端监听端口", lambda: edit_node("port")),
+        ("修改客户端连接地址或端口", lambda: edit_node("endpoint")),
+        ("删除一个节点", lambda: edit_node("delete")),
+    )))
 
 
 def select_core():
@@ -242,16 +256,22 @@ def select_core():
     return cores[choice - 1] if choice else None
 
 
+SERVICE_ACTIONS = {"start": "启动", "stop": "停止", "restart": "重启",
+                   "enable": "开启自启", "disable": "关闭自启", "logs": "查看日志"}
+
+
 def service_action(action):
     vps.host_check()
     core = select_core()
-    if core and (action == "logs" or confirm(f"对 {core} 执行 {action}")):
+    if core and (action == "logs" or confirm(f"确认{SERVICE_ACTIONS[action]} {core}")):
         manage.service(core, action)
 
 
-def service_menu():
-    submenu("核心服务管理", ("查看状态", "启动", "停止", "重启", "开启开机自启", "关闭开机自启", "查看最近日志"),
-            (lambda: execute(["audit"]), *(lambda a=a: service_action(a) for a in ("start", "stop", "restart", "enable", "disable", "logs"))))
+def startup_menu():
+    return menu("代理核心 › 开机自启", (None, (
+        ("开启开机自启", lambda: service_action("enable")),
+        ("关闭开机自启", lambda: service_action("disable")),
+    )))
 
 
 def upgrade_cores():
@@ -284,7 +304,19 @@ def upgrade_cores():
 
 
 def core_menu():
-    submenu("核心升级", ("查看官方正式版", "预览并升级"), (lambda: execute(["releases"]), upgrade_cores))
+    return menu("代理核心", ("查看与排查", (
+        ("查看核心和监听端口状态", lambda: execute(["audit"])),
+        ("查看核心最近日志", lambda: service_action("logs")),
+        ("诊断 REALITY 连接", lambda: execute(["audit", "--reality"])),
+    )), ("服务操作", (
+        ("重启核心", lambda: service_action("restart")),
+        ("启动核心", lambda: service_action("start")),
+        ("停止核心", lambda: service_action("stop")),
+        ("设置开机自启", startup_menu),
+    )), ("核心版本", (
+        ("查看官方正式版", lambda: execute(["releases"])),
+        ("预览并升级核心", upgrade_cores),
+    )))
 
 
 def tune_apply():
@@ -307,11 +339,22 @@ def vacuum():
 
 
 def tune_menu():
-    submenu("小内存 VPS 优化", ("查看状态", "预览并应用", "验证当前设置", "验证重启后设置",
-                              "查看上次 OOM", "清理归档日志", "回退最近一次优化"),
-            (lambda: execute(["tune", "status"]), tune_apply, lambda: execute(["tune", "verify"]),
-             lambda: execute(["tune", "verify", "--after-reboot"]), lambda: execute(["tune", "oom", "--previous"]),
-             vacuum, lambda: execute(["tune", "rollback"]) if confirm("确认回退优化") else None))
+    return menu("VPS › 小内存优化", (None, (
+        ("查看内存、Swap、日志和 BBR 状态", lambda: execute(["tune", "status"])),
+        ("预览并应用优化", tune_apply),
+        ("验证当前设置", lambda: execute(["tune", "verify"])),
+        ("验证重启后设置", lambda: execute(["tune", "verify", "--after-reboot"])),
+        ("清理归档系统日志", vacuum),
+        ("回退最近一次 VPS 优化", lambda: execute(["tune", "rollback"]) if confirm("确认回退优化") else None),
+    )))
+
+
+def vps_menu():
+    return menu("VPS 检查与优化", (None, (
+        ("检查 VPS 兼容性", lambda: execute(["doctor"])),
+        ("查看上次开机的内存不足记录（OOM）", lambda: execute(["tune", "oom", "--previous"])),
+        ("小内存优化 · Swap、日志、BBR", tune_menu),
+    )))
 
 
 def rollback_menu():
@@ -346,24 +389,34 @@ def issue_certificate():
 
 
 def certificate_menu():
-    vps.host_check()
-    submenu("证书管理", ("查看证书与续期任务", "自动申请证书", "导入已有证书", "检查续期", "模拟续期验收"),
-            (certificates.status, issue_certificate, import_certificate,
-             certificates.renew, lambda: certificates.renew(dry_run=True)))
+    return menu("证书", (None, (
+        ("查看证书有效期与续期任务", lambda: execute(["certificate", "status"])),
+        ("自动申请 Let's Encrypt 证书", issue_certificate),
+        ("导入已有证书", import_certificate),
+        ("检查并执行续期", lambda: execute(["certificate", "renew"])),
+        ("模拟续期，不替换证书", lambda: execute(["certificate", "dry-run"])),
+    )))
 
 
-def update_menu():
+def update_manager():
     vps.host_check()
-    choice = choose("RayZento 管理器更新", ("检查并更新", "恢复上一版脚本"))
-    if choice == 1:
-        candidate = updates.preview()
-        if confirm("确认下载并更新管理器"):
-            if updates.update(candidate):
-                return True
-    elif choice == 2 and confirm("确认恢复上一版管理器"):
+    candidate = updates.preview()
+    if confirm("确认下载并更新 RayZento 管理脚本") and updates.update(candidate):
+        return Navigation.EXIT
+
+
+def rollback_manager():
+    vps.host_check()
+    if confirm("确认恢复上一版 RayZento 管理脚本"):
         updates.rollback()
-        return True
-    return False
+        return Navigation.EXIT
+
+
+def recovery_menu():
+    return menu("备份与恢复", (None, (
+        ("从备份恢复节点或核心", rollback_menu),
+        ("恢复上一版 RayZento 管理脚本", rollback_manager),
+    )))
 
 
 def uninstall():
@@ -373,13 +426,13 @@ def uninstall():
     if choice == len(cores) + 2:
         if confirm("确认卸载管理器，保留私有备份"):
             manage.remove_manager()
-            return True
-        return False
+            return Navigation.EXIT
+        return
     if choice and confirm("确认停止并卸载所选核心，客户端连接会中断"):
         selected = cores if choice == len(cores) + 1 else [cores[choice - 1]]
         for core in selected:
             manage.remove_core(core)
-        print("所选核心已卸载。备份、证书和系统优化可分别在对应菜单管理。")
+        print("所选核心已卸载。可在「备份与恢复」查看回退记录。")
 
 def register_command(*, confirmed=False):
     vps.host_check()
@@ -419,21 +472,61 @@ def register_command(*, confirmed=False):
             staged.unlink(missing_ok=True)
     print("管理命令已注册。以后运行 sudo rayzento。")
 
+def warp_menu():
+    def enable_warp():
+        if confirm("节点访问的全部 IPv4 站点将经 WARP 出站。首次会用 wgcf 注册免费账户并接受 Cloudflare 使用条款。切换会短暂重启代理核心。"):
+            execute(["warp", "on", "--accept-cloudflare-terms"])
 
+    def import_warp():
+        path = required("VPS 上 root 独占的 WARP WireGuard 配置路径")
+        if confirm("用这份配置开启全站 WARP。切换会短暂重启代理核心。"):
+            execute(["warp", "on", "--profile", path])
+
+    def watch_menu():
+        def enable_watch():
+            if confirm("定时检查 WARP。连续失败会尝试重连，仍失败时改回原 VPS 公网 IP。"):
+                execute(["warp", "watch-on"])
+
+        return menu("WARP 出口 › 定时恢复", (None, (
+            ("查看最近检查日志", lambda: execute(["warp", "watch-log"])),
+            ("开启定时恢复", enable_watch),
+            ("关闭定时恢复", lambda: execute(["warp", "watch-off"])),
+        )))
+
+    return menu("WARP 出口 · 全站 IPv4 / TCP 与 UDP", ("查看与切换", (
+        ("查看当前状态和实际出口 IP", lambda: execute(["warp", "status"])),
+        ("开启 WARP（首次自动注册）", enable_warp),
+        ("关闭 WARP，恢复原出口", lambda: execute(["warp", "off"])),
+    )), ("检测与故障恢复", (
+        ("对比 Google、Gemini、Netflix、ChatGPT", lambda: execute(["warp", "sites"])),
+        ("重连 WARP（失败后恢复直出）", lambda: execute(["warp", "repair"])),
+        ("定时恢复与日志", watch_menu),
+    )), ("已有配置", (
+        ("导入 WireGuard 配置并开启", import_warp),
+    )))
+
+
+def manager_menu():
+    return menu("RayZento 管理", (None, (
+        ("检查并更新 RayZento 管理脚本", update_manager),
+        ("注册 rayzento 命令", register_command),
+        ("卸载核心、节点或 RayZento 管理器", uninstall),
+    )))
 
 
 def run():
-    handlers = (install_nodes, node_menu, service_menu, core_menu, tune_menu, certificate_menu,
-                rollback_menu, update_menu, lambda: execute(["doctor"]), lambda: execute(["profiles"]),
-                register_command, uninstall)
-    while True:
-        try:
-            action = choose(f"RayZento {vps.VERSION}\n管理命令：rayzento（非 root 用户：sudo rayzento）", MAIN, "退出")
-            if action == 0:
-                return
-            result = operation(handlers[action - 1])
-            if action in (8, 12) and result:
-                return
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return
+    title = f"RayZento {vps.VERSION}\n管理命令：rayzento（非 root 用户：sudo rayzento）"
+    try:
+        menu(title, ("日常使用", (
+            ("节点 · 查看链接、导出与安装", node_menu),
+            ("WARP 出口 · 开关与业务检测", warp_menu),
+        )), ("运行与维护", (
+            ("代理核心 · 状态、日志与升级", core_menu),
+            ("证书 · 申请与续期", certificate_menu),
+            ("VPS · 兼容性检查与小内存优化", vps_menu),
+        )), ("恢复与管理", (
+            ("备份与恢复", recovery_menu),
+            ("RayZento 管理 · 更新与卸载", manager_menu),
+        )), main=True)
+    except (EOFError, KeyboardInterrupt):
+        print()

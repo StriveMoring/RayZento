@@ -23,6 +23,8 @@ MODULES = (
     "rayzento_update.py",
     "rayzento_firewall.py",
     "rayzento_diagnostics.py",
+    "rayzento_warp.py",
+    "rayzento_warp_checks.py",
 )
 
 
