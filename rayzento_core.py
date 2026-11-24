@@ -26,11 +26,12 @@ import uuid
 import zipfile
 
 import rayzento_compat as compatibility
+import rayzento_terminal as terminal
 
 ROOT = Path("/var/lib/rayzento")
 OPT = Path("/opt/rayzento")
 UNITS = Path("/etc/systemd/system")
-VERSION = "2.4.1"
+VERSION = "2.4.2"
 SPECS = {
     "xray": ("XTLS/Xray-core", "rayzento-xray.service"),
     "sing-box": ("SagerNet/sing-box", "rayzento-sing-box.service"),
@@ -553,7 +554,7 @@ def apply(targets, reality_ready, latest=()):
                 print(f"{svc.unit} 已用新核心启动，原监听已恢复。", flush=True)
             manifest["state"] = "local-verified"
             atomic_json(tx / "manifest.json", manifest)
-            print("本机监听验收通过。请从 v2rayN 和 RayZento 实测涉及的入站及公网出口。")
+            terminal.result("ok", "核心已升级，本机监听检查通过。公网连通性和出口可在客户端验证。")
             print(f"回滚命令：sudo rayzento rollback {txid}")
         except BaseException:
             if changed:
@@ -621,6 +622,7 @@ def main(argv=None):
     sub.add_parser("releases", help="只查询官方最新正式版；不会更新")
     audit = sub.add_parser("audit", help="只读取此 VPS 的服务归属和端口")
     audit.add_argument("--reality", action="store_true", help="脱敏检查 REALITY 目标、TLS 回落和近期错误，不修改服务")
+    audit.add_argument("--summary", action="store_true", help="显示中文状态摘要")
     certificate = sub.add_parser("certificate", help="证书状态、续期和自动部署")
     certificate.add_argument("certificate_action", choices=("status", "renew", "dry-run", "deploy"))
     node = sub.add_parser("nodes", help="节点链接和客户端导出")
@@ -716,9 +718,14 @@ def main(argv=None):
                 continue
             try:
                 s = inspect(c, require_running=False)
-                print(f"{c}: {s.old} · {sysprop(s.unit, 'ActiveState')} · 自启 {sysprop(s.unit, 'UnitFileState')}")
-                print(f"  {s.unit} {s.exe} | {', '.join(s.ports)}")
-                print(f"  官方来源 {s.origin['repository']} | {s.origin['archive_sha256']}")
+                state, startup = sysprop(s.unit, "ActiveState"), sysprop(s.unit, "UnitFileState")
+                if args.summary:
+                    print(f"{c} {s.old}  {terminal.service_status(state, startup)}")
+                    print(f"  本机监听  {', '.join(s.ports) if s.ports else '未检测到端口'}")
+                else:
+                    print(f"{c}: {s.old} · {state} · 自启 {startup}")
+                    print(f"  {s.unit} {s.exe} | {', '.join(s.ports)}")
+                    print(f"  官方来源 {s.origin['repository']} | {s.origin['archive_sha256']}")
             except (Failure, OSError, ValueError) as e:
                 print(f"{c}: 不自动接管。{e}")
                 unsupported = True
@@ -755,8 +762,8 @@ def cli():
     try:
         main()
     except ACTION_ERRORS as error:
-        print(f"停止：{error}", file=sys.stderr)
+        terminal.result("error", str(error), stream=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
-        print("操作中断。请核对运行状态和回退记录。", file=sys.stderr)
+        terminal.result("warning", "操作中断。请核对运行状态和回退记录。", stream=sys.stderr)
         sys.exit(130)

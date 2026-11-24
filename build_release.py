@@ -16,6 +16,7 @@ MODULES = (
     "rayzento_core.py",
     "rayzento_compat.py",
     "rayzento_menu.py",
+    "rayzento_terminal.py",
     "rayzento_tune.py",
     "rayzento_nodes.py",
     "rayzento_manage.py",

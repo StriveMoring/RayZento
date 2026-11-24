@@ -1,6 +1,7 @@
 """Public website and temporary core egress checks for the WARP menu."""
 
 import copy
+from dataclasses import dataclass
 import ipaddress
 import os
 from pathlib import Path
@@ -13,6 +14,7 @@ import time
 from urllib.parse import urlsplit
 
 import rayzento_core as vps
+import rayzento_terminal as terminal
 
 
 TRACE = 'https://www.cloudflare.com/cdn-cgi/trace'
@@ -164,7 +166,6 @@ def core_probe(folder, service, candidate, native_ip):
             udp = socks_udp_exit(port, password)
             if tcp.get('warp') not in ('on', 'plus') or native_ip in (tcp['ip'], udp):
                 raise vps.Failure(f'{service.core} 测到原 VPS 出口或未确认 WARP。')
-            print(f'{service.core} 隔离出站实测 · TCP {tcp["ip"]} · UDP {udp}')
         finally:
             if proc.poll() is None:
                 proc.terminate()
@@ -175,6 +176,36 @@ def core_probe(folder, service, candidate, native_ip):
                     proc.wait()
 
 
+@dataclass(frozen=True)
+class PageResult:
+    kind: str
+    text: str
+
+
+def page_result(body, code, host):
+    # Only label observations from the public response, regardless of the HTTP code.
+    snippets = (
+        (r'not (?:currently )?available in your (?:country|region)|unsupported_country', '检测到地区限制'),
+        (r'you seem to be using (?:a |an )?(?:vpn|proxy)', '检测到代理限制'),
+        (r'<title>\s*(?:just a moment|attention required)', '遇到验证页'),
+    )
+    for pattern, label in snippets:
+        if re.search(pattern, body, re.I):
+            return PageResult('warning', label)
+    if re.fullmatch(r'(?:www\.)?google\.com\.hk', host):
+        return PageResult('warning', '跳转香港站')
+    if code in ('401', '403', '429'):
+        message = '触发限流' if code == '429' else '访问受限'
+        return PageResult('warning', f'{message} · HTTP {code}')
+    if re.fullmatch(r'2[0-9]{2}', code):
+        return PageResult('ok', '页面可达')
+    if re.fullmatch(r'3[0-9]{2}', code):
+        return PageResult('warning', f'仍有跳转 · HTTP {code}')
+    if re.fullmatch(r'[45][0-9]{2}', code):
+        return PageResult('error', f'请求失败 · HTTP {code}')
+    return PageResult('error', '未收到有效响应')
+
+
 def public_site(url, source):
     args = curl_args() + ['-A', 'Mozilla/5.0 RayZento/egress-check', '-L', '--max-redirs', '4',
                           '--max-filesize', '2097152', '-w', '\n%{http_code} %{url_effective}']
@@ -183,23 +214,26 @@ def public_site(url, source):
     try:
         result = vps.command(args + [url]).stdout.decode(errors='replace')
     except vps.Failure:
-        return '本次无法确认'
+        return PageResult('error', '连接未完成')
     body, _, metadata = result.rpartition('\n')
     code, _, destination = metadata.partition(' ')
-    host = urlsplit(destination).hostname or '未识别'
-    # Site HTML may be a login shell or bot challenge. Only label observable hints.
-    snippets = ((r'not (?:currently )?available in your (?:country|region)|unsupported_country', '出现地区限制提示'),
-                (r'you seem to be using (?:a |an )?(?:vpn|proxy)', '出现代理限制提示'),
-                (r'cf-chl-|<title>just a moment', '出现验证页'))
-    hint = next((label for pattern, label in snippets if re.search(pattern, body, re.I)), '')
-    if re.fullmatch(r'(?:www\.)?google\.com\.hk', host):
-        hint = '跳转香港地区域名'
-    return f'HTTP {code} {host}' + (f' · {hint}' if hint else '')
+    return page_result(body, code, urlsplit(destination).hostname or '')
 
 
 def compare_sites(source=None):
-    print('公开页面检测，账号登录、片库和实际播放需另外验证。')
+    print(f"\n{terminal.color('网站检测 · 逐项检查公开页面', 'heading')}", flush=True)
+    paths = [('原 VPS 出口', None)]
+    if source:
+        paths.append(('WARP 出口', source))
+    results = {name: [] for name, _ in paths}
     for label, url in SITES:
-        original = public_site(url, None)
-        warped = public_site(url, source) if source else None
-        print(f'{label} · 原 VPS {original}' + (f' | WARP {warped}' if warped else ''))
+        statuses = []
+        for name, address in paths:
+            check = public_site(url, address)
+            results[name].append(check.kind)
+            statuses.append(f'{name} {terminal.badge(check.kind, check.text)}')
+        print(f"  {label}  {'  /  '.join(statuses)}", flush=True)
+    print('\n  检测汇总')
+    for name, checks in results.items():
+        print(f"    {name}  {checks.count('ok')} 项页面可达 · {checks.count('warning')} 项需留意 · {checks.count('error')} 项未通过")
+    print('  页面可达只代表公开网页有响应。登录、Netflix 片库及播放需在客户端实测。')

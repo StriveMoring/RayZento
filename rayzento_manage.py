@@ -14,6 +14,7 @@ import rayzento_core as vps
 import rayzento_provision as provision
 import rayzento_nodes as nodes
 import rayzento_firewall as firewall
+import rayzento_terminal as terminal
 
 CHANGE_ID = re.compile(r"change-[0-9]{19}-[0-9a-f]{8}")
 REMOVED_ID = re.compile(r"removed-[0-9]{19}-[0-9a-f]{8}")
@@ -65,7 +66,8 @@ def service(core, action):
             print(vps.command(["journalctl", "-u", svc.unit, "-n", "80", "--no-pager", "-o", "short-iso"]).stdout.decode(errors="replace"))
         else:
             raise vps.Failure("未知服务操作。")
-        print(f"{svc.unit} {vps.sysprop(svc.unit, 'ActiveState')} / 自启 {vps.sysprop(svc.unit, 'UnitFileState')}")
+        status = terminal.service_status(vps.sysprop(svc.unit, "ActiveState"), vps.sysprop(svc.unit, "UnitFileState"))
+        print(f"{core}  {status}")
 
 
 def list_backups():

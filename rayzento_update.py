@@ -10,6 +10,7 @@ import tempfile
 import zipfile
 
 import rayzento_core as vps
+import rayzento_terminal as terminal
 
 REPOSITORY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*")
 COMMAND_PATH = Path("/usr/local/bin/rayzento")
@@ -112,7 +113,7 @@ def update(candidate):
                 replace_tool(candidate_file)
             finally:
                 candidate_file.unlink(missing_ok=True)
-    print("RayZento 已更新。当前菜单退出，重新运行 sudo rayzento 使用新版。")
+    terminal.result("ok", f"RayZento 已更新到 {tag[1:]}。重新运行 rayzento 打开新版菜单。")
     return True
 
 
@@ -126,4 +127,4 @@ def rollback():
         if saved.is_symlink() or vps.sha(saved) != record["before_sha"] or vps.sha(target) != record["after_sha"]:
             raise vps.Failure("脚本备份或当前文件已变化。")
         replace_tool(saved)
-    print("已恢复上一版管理器。重新运行 sudo rayzento。")
+    terminal.result("ok", "已恢复上一版管理器。重新运行 rayzento 打开菜单。")

@@ -3,6 +3,7 @@
 import base64
 import configparser
 import copy
+from dataclasses import dataclass
 import hashlib
 import ipaddress
 import json
@@ -18,6 +19,7 @@ import zipfile
 
 import rayzento_core as vps
 import rayzento_manage as manage
+import rayzento_terminal as terminal
 from rayzento_warp_checks import compare_sites, core_probe, trace as tcp_trace, udp_exit
 
 
@@ -32,6 +34,23 @@ WGCF_DIGESTS = {
     'amd64': '4fb7a136aa470ece11d17949c7db07b040ec9c604742dc8680bcf1889f85d0c8',
     'arm64': '710ab2d8ac145d81a4cf0c11bdb0e05914f77ae2a45f67b87e718d84b4cb7301',
 }
+PHASES = {'preparing': '上次切换尚未完成准备', 'applying': '切换未完成', 'restoring': '等待完成回退'}
+REGIONS = {'US': '美国', 'DE': '德国', 'HK': '香港'}
+
+
+@dataclass(frozen=True)
+class ExitCheck:
+    original: str
+    tcp: str
+    udp: str
+    region: str
+
+
+def show_exit(check):
+    region = REGIONS.get(check.region, check.region)
+    print(f'  WARP TCP 出口   {check.tcp}（{region}）')
+    print(f'  WARP UDP 出口   {check.udp}')
+    print(f'  VPS 原出口      {check.original}')
 
 
 def root():
@@ -385,15 +404,25 @@ def probe(address, original=None):
     routes = route_json('route', 'get', '1.1.1.1', 'from', address)
     if not routes or routes[0].get('dev') != DEVICE:
         raise vps.Failure('WARP 源地址未命中独立路由。')
-    direct = tcp_trace()
-    warp = tcp_trace(address)
-    udp = udp_exit(address)
+    try:
+        direct = tcp_trace()
+    except vps.Failure:
+        raise vps.Failure('无法检测 VPS 原出口。') from None
+    try:
+        warp = tcp_trace(address)
+    except vps.Failure:
+        raise vps.Failure('WARP 的 TCP 出口未通过检测。') from None
+    try:
+        udp = udp_exit(address)
+    except vps.Failure:
+        raise vps.Failure('WARP 的 UDP 出口未通过检测。') from None
     if (direct.get('warp') in ('on', 'plus') or warp.get('warp') not in ('on', 'plus')
             or warp['ip'] == direct['ip'] or udp == direct['ip']):
         raise vps.Failure('原系统出口或 WARP TCP / UDP 出口不符合预期。')
     if original and direct['ip'] != original:
         raise vps.Failure('VPS 原系统出口发生变化，停止切换。')
-    print(f'原系统 {direct["ip"]} · WARP TCP {warp["ip"]} · UDP {udp} · 地区 {warp.get("loc", "未知")}')
+    region = warp.get('loc', '')
+    return ExitCheck(direct['ip'], warp['ip'], udp, region if re.fullmatch(r'[A-Z]{2}', region) else '地区未知')
 
 
 def wait_for_exit(address, original):
@@ -456,13 +485,15 @@ def restore(state, folder):
 def repair(state, folder):
     if state['phase'] != 'enabled':
         restore(state, folder)
-        print('已恢复上次未完成操作。')
+        terminal.result('ok', '上一次回退已完成，当前使用原 VPS 出口。')
         return
     try:
         for attempt in range(3):
             try:
                 systemctl('restart', UNIT)
-                probe(state['address'])
+                check = probe(state['address'])
+                terminal.result('ok', 'WARP 已重新连通，TCP 和 UDP 检查通过。')
+                show_exit(check)
                 return
             except vps.Failure:
                 if attempt < 2:
@@ -471,13 +502,18 @@ def repair(state, folder):
                     raise
     except (vps.Failure, KeyboardInterrupt):
         restore(state, folder)
-        print('三次以内未恢复 WARP，已回到原 VPS 出口。')
+        terminal.result('warning', 'WARP 重连未成功，已回到原 VPS 出口。')
         raise
 
 
 def enable(folder, accept_terms, imported):
-    if read_state():
-        raise vps.Failure('已有 WARP 接管记录，请先查看状态或恢复原出口。')
+    existing = read_state()
+    if existing:
+        if existing['phase'] == 'enabled':
+            terminal.result('info', 'WARP 已开启。选「1」可检查当前出口。')
+            return
+        phase = PHASES.get(existing['phase'], '上一次操作未完成')
+        raise vps.Failure(f'{phase}。请选「3」恢复原 VPS 出口，再重新开启。')
     manage.check_pending()
     services = []
     configs = {}
@@ -490,6 +526,7 @@ def enable(folder, accept_terms, imported):
             services.append(service)
     if not services:
         raise vps.Failure('未找到 RayZento 管理的 Xray 或 sing-box 节点。')
+    terminal.result('info', '正在检查 VPS 原出口和 WARP 隧道，请稍候。')
     original = tcp_trace()
     if original.get('warp') in ('on', 'plus'):
         raise vps.Failure('系统出口已经经过 WARP，先处理已有的系统级接管。')
@@ -513,6 +550,8 @@ def enable(folder, accept_terms, imported):
         wait_for_exit(address, original['ip'])
         for service in services:
             core_probe(folder, service, candidates[service.core], original['ip'])
+        names = '、'.join(service.core for service in services)
+        terminal.result('info', f'{names} 的 TCP 和 UDP 出站预检通过，正在切换代理服务。')
         state['phase'] = 'applying'
         vps.atomic_json(state_file(), state)
         for service in services:
@@ -520,17 +559,47 @@ def enable(folder, accept_terms, imported):
             vps.atomic_json(service.config, cfg)
             if service.pid:
                 boot(service, cfg)
-        probe(address, original['ip'])
+        check = probe(address, original['ip'])
         state['phase'] = 'enabled'
         vps.atomic_json(state_file(), state)
     except BaseException:
         try:
             restore(state, folder)
-            print('未通过验收，已自动恢复原出口。')
+            terminal.result('warning', '切换未完成，已自动恢复原 VPS 出口。')
         except (vps.Failure, OSError, ValueError, KeyError) as error:
-            print(f'自动恢复未确认，回退记录已保留：{error}')
+            terminal.result('error', f'自动回退未完成，已保留恢复记录。请选「3」重试恢复。原因：{error}')
         raise
-    print('WARP 已接管受管节点访问的所有 IPv4 站点，覆盖 TCP 和 UDP。')
+    terminal.result('ok', 'WARP 已开启，受管节点的新 IPv4 连接使用 WARP。')
+    show_exit(check)
+
+
+def show_status(state):
+    if not state:
+        terminal.result('info', 'RayZento 的 WARP 已关闭。')
+        try:
+            current = tcp_trace()
+        except vps.Failure:
+            terminal.result('warning', '本次未能确认 VPS 的公网 IPv4。')
+        else:
+            print(f'  VPS 当前出口    {current["ip"]}')
+            if current.get('warp') in ('on', 'plus'):
+                terminal.result('warning', '系统流量仍经 WARP，可能有其他接管配置。')
+        return
+    phase = state['phase']
+    if phase != 'enabled':
+        terminal.result('warning', f'{PHASES.get(phase, "操作未完成")}。请选「3」恢复原 VPS 出口。')
+        return
+    terminal.result('info', '正在检查 WARP 的 TCP 和 UDP 出口，请稍候。')
+    for core, record in state['cores'].items():
+        if manage.load_config(core)['outbounds'] != record['after']:
+            raise vps.Failure(f'WARP 配置为开启，但 {core} 出站配置已变化。请先排查配置。')
+    try:
+        check = probe(state['address'])
+    except vps.Failure as error:
+        raise vps.Failure(f'WARP 配置为开启，但实际出口检查失败。{error}') from None
+    terminal.result('ok', 'WARP 已开启，TCP 和 UDP 出口检查通过。')
+    show_exit(check)
+    print(f"  定时恢复        {'已开启' if monitor_running() else '已关闭'}")
 
 
 def run(action, *, accept_terms=False, imported=None):
@@ -544,39 +613,40 @@ def run(action, *, accept_terms=False, imported=None):
             state = read_state()
             if action == 'on':
                 enable(folder, accept_terms, imported)
+            elif action == 'status':
+                show_status(state)
             elif action == 'sites':
                 if state and state['phase'] == 'enabled':
-                    probe(state['address'])
-                    compare_sites(state['address'])
+                    try:
+                        probe(state['address'])
+                    except vps.Failure as error:
+                        terminal.result('warning', f'{error} 本次只检测原 VPS 出口。')
+                        compare_sites()
+                    else:
+                        compare_sites(state['address'])
                 else:
+                    reason = 'WARP 尚未完成切换或回退' if state else 'WARP 已关闭'
+                    terminal.result('info', f'{reason}，本次只检测原 VPS 出口。')
                     compare_sites()
             elif action == 'watch-off':
                 configure_monitor(False)
-                print('定时恢复已关闭。')
+                terminal.result('ok', '定时恢复已关闭。')
             elif action == 'monitor':
                 monitor(state, folder)
             elif action == 'watch-log':
                 print(vps.command(['/usr/bin/journalctl', '-u', MONITOR_UNIT, '-n', '25',
                                    '--no-pager', '-o', 'short-iso']).stdout.decode(errors='replace'))
             elif not state:
-                print('RayZento 当前使用原 VPS 出口。')
                 if action == 'watch-on':
                     raise vps.Failure('先开启并验收 WARP，再打开定时恢复。')
+                terminal.result('info', 'WARP 已关闭，当前使用原 VPS 出口。')
             elif action == 'watch-on':
                 if state['phase'] != 'enabled':
                     raise vps.Failure('WARP 未完成启用，请先恢复上一次操作。')
                 configure_monitor(True)
-                print('定时恢复已开启，连续三轮失败才重连，重连仍失败时恢复直出。')
+                terminal.result('ok', '定时恢复已开启。连续三轮失败会重连，重连仍失败则恢复原 VPS 出口。')
             elif action == 'off':
                 restore(state, folder)
-                print('已恢复原 VPS 出口。')
+                terminal.result('ok', 'WARP 已关闭，已恢复原 VPS 出口。')
             elif action == 'repair':
                 repair(state, folder)
-            else:
-                print('RayZento WARP 状态', state['phase'])
-                print('定时恢复', '已开启' if monitor_running() else '关闭')
-                if state['phase'] == 'enabled':
-                    for core, record in state['cores'].items():
-                        if manage.load_config(core)['outbounds'] != record['after']:
-                            raise vps.Failure(f'{core} 出站已变化，请核对接管状态。')
-                    probe(state['address'])

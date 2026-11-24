@@ -13,6 +13,7 @@ import rayzento_core as vps
 import rayzento_certificates as certificates
 import rayzento_manage as manage
 import rayzento_nodes as nodes
+import rayzento_terminal as terminal
 import rayzento_update as updates
 
 
@@ -22,24 +23,31 @@ COMMAND_PATH = Path("/usr/local/bin/rayzento")
 class Navigation(Enum):
     MAIN = auto()
     EXIT = auto()
+    BACK = auto()
 
 
-def choose(title, items, exit_text="返回上一级", *, headings=None):
+def choose(title, items, exit_text="返回上一级", *, headings=None, show=True):
     while True:
-        print(f"\n{title}")
-        for number, item in enumerate(items, 1):
-            if headings and number in headings:
-                print(f"\n{headings[number]}")
-            print(f"  {number}. {item}")
-        if headings:
-            print()
-        print(f"  0. {exit_text}")
-        answer = input("选择编号 > ").strip()
+        if show:
+            print(f"\n{terminal.color(title, 'heading')}")
+            for number, item in enumerate(items, 1):
+                if headings and number in headings:
+                    print(f"\n{terminal.color(headings[number], 'heading')}")
+                print(f"  {number}. {item}")
+            if headings:
+                print()
+            print(f"  0. {exit_text}")
+        prompt = "选择编号" if show else f"{title.splitlines()[0]} · 输入编号（回车看菜单，0 {exit_text}）"
+        answer = input(f"{prompt} > ").strip()
+        if not answer and not show:
+            show = True
+            continue
         if answer.isascii() and answer.isdecimal() and len(answer) <= 3:
             choice = int(answer)
             if 0 <= choice <= len(items):
                 return choice
-        print("请输入列表里的编号。")
+        terminal.result("warning", "请输入列表里的编号。")
+        show = True
 
 
 def confirm(message):
@@ -68,12 +76,12 @@ def operation(handler):
     except EOFError:
         raise
     except KeyboardInterrupt:
-        print("\n操作已取消或中断。")
+        terminal.result("warning", "操作已取消或中断。")
     except SystemExit as error:
         if error.code not in (None, 0):
-            print(f"操作停止，退出码 {error.code}。")
+            terminal.result("error", f"操作已停止，退出码 {error.code}。")
     except vps.ACTION_ERRORS as error:
-        print(f"操作失败：{error}", file=sys.stderr)
+        terminal.result("error", str(error), stream=sys.stderr)
 
 
 def menu(title, *sections, main=False):
@@ -84,13 +92,15 @@ def menu(title, *sections, main=False):
             headings[len(options) + 1] = heading
         options.extend(entries)
     labels = [label for label, _ in options]
+    show = True
     while True:
-        choice = choose(title, labels, "退出" if main else "返回上一级", headings=headings)
+        choice = choose(title, labels, "退出" if main else "返回上一级", headings=headings, show=show)
         if not choice:
-            return
+            return Navigation.BACK
         result = operation(options[choice - 1][1])
         if result is Navigation.EXIT or (result is Navigation.MAIN and not main):
             return result
+        show = result in (Navigation.BACK, Navigation.MAIN) or not sys.stdout.isatty()
 
 
 def settings():
@@ -144,7 +154,7 @@ def install_selected(names, options):
     current = {n["profile"] for n in nodes.all_nodes()}
     selected = [n for n in names if n not in current]
     if not selected:
-        print("所选协议已安装。可返回「节点」查看链接或修改配置。")
+        terminal.result("info", "所选协议已安装。可返回「节点」查看链接或修改配置。")
         return Navigation.MAIN
     options = {k: value for k, value in options.items() if k in selected}
     server = server_address()
@@ -173,7 +183,7 @@ def install_selected(names, options):
     if not fresh:
         nodes.display()
         nodes.export()
-    print("安装完成，返回主菜单。")
+    terminal.result("ok", "节点已安装，返回主菜单。")
     return Navigation.MAIN
 
 
@@ -305,7 +315,7 @@ def upgrade_cores():
 
 def core_menu():
     return menu("代理核心", ("查看与排查", (
-        ("查看核心和监听端口状态", lambda: execute(["audit"])),
+        ("查看核心和监听端口状态", lambda: execute(["audit", "--summary"])),
         ("查看核心最近日志", lambda: service_action("logs")),
         ("诊断 REALITY 连接", lambda: execute(["audit", "--reality"])),
     )), ("服务操作", (
@@ -482,6 +492,10 @@ def warp_menu():
         if confirm("用这份配置开启全站 WARP。切换会短暂重启代理核心。"):
             execute(["warp", "on", "--profile", path])
 
+    def disable_warp():
+        if confirm("恢复原 VPS 出口。相关代理连接可能短暂中断。"):
+            execute(["warp", "off"])
+
     def watch_menu():
         def enable_watch():
             if confirm("定时检查 WARP。连续失败会尝试重连，仍失败时改回原 VPS 公网 IP。"):
@@ -493,10 +507,10 @@ def warp_menu():
             ("关闭定时恢复", lambda: execute(["warp", "watch-off"])),
         )))
 
-    return menu("WARP 出口 · 全站 IPv4 / TCP 与 UDP", ("查看与切换", (
-        ("查看当前状态和实际出口 IP", lambda: execute(["warp", "status"])),
-        ("开启 WARP（首次自动注册）", enable_warp),
-        ("关闭 WARP，恢复原出口", lambda: execute(["warp", "off"])),
+    return menu("WARP 出口", ("查看与切换", (
+        ("查看是否已开启、测试当前出口", lambda: execute(["warp", "status"])),
+        ("开启 WARP", enable_warp),
+        ("关闭 WARP，恢复原 VPS 出口", disable_warp),
     )), ("检测与故障恢复", (
         ("对比 Google、Gemini、Netflix、ChatGPT", lambda: execute(["warp", "sites"])),
         ("重连 WARP（失败后恢复直出）", lambda: execute(["warp", "repair"])),
