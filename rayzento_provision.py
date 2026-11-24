@@ -15,6 +15,7 @@ import uuid
 
 import rayzento_core as vps
 import rayzento_firewall as firewall
+import rayzento_terminal as terminal
 
 F = vps.Failure
 NAMES = {
@@ -280,7 +281,7 @@ def install(args):
             if vps.parse_banner(core, vps.version_banner(targets[core])) != tag:
                 raise F("候选核心版本不符。")
             origins[core] = vps.release_record(core, tag, digest, vps.sha(targets[core]))
-            print(f"{core} {tag} {digest}")
+            terminal.result("info", f"{core} {tag} 的官方发布文件校验通过。")
         configs, clients, links = profiles(ports, args.server, sni, args.cover, bind, cert, key, targets)
         inventory = node_export.records(ports, clients, links)
         for core in cores:
@@ -295,10 +296,10 @@ def install(args):
             "key": str(key) if key else None, "sni": sni,
             "origins": origins, "configs": {c: vps.sha(cfgs[c]) for c in cores},
         })
-        print(f"私有候选目录：{stage}")
         for k, port in ports.items():
-            print(f"{k}: {port}/{'+'.join(NAMES[k][2])} {NAMES[k][1]}")
+            terminal.field(NAMES[k][1], f"{port}/{' + '.join(NAMES[k][2]).upper()}")
         if args.prepare_only:
+            terminal.field("候选配置", stage)
             print(f"候选已校验。运行 sudo rayzento activate {stage.name} 启用。如含 REALITY，加 --reality-client-ready。")
             return
         activate(stage, args.reality_client_ready)
@@ -366,7 +367,7 @@ def activate(stage, reality_ready):
             else:
                 raise F(f"{unit} 未提供预期 TCP/UDP 监听。")
         vps.command(["systemctl", "enable", *[x.name for x in installed]])
-        print("服务已启动且监听就绪，本机防火墙端口同步完成；云平台安全组需在服务商后台放行。")
+        terminal.result("ok", "服务已启动并通过本机监听检查。公网端口还需在服务商安全组放行。")
     except BaseException:
         blocked = set()
         for dest in reversed(installed):
@@ -391,7 +392,7 @@ def activate(stage, reality_ready):
         node_export.export(inventory, locked=True)
         node_export.display(inventory)
     except (F, OSError, ValueError) as error:
-        print(f"服务已启动，导出尚需处理：{error}。可在节点菜单重新导出。")
+        terminal.result("warning", f"服务已启动，但客户端文件未导出。可在节点菜单重试。{error}")
 
 
 def add_install_options(parser):

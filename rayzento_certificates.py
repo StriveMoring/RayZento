@@ -1,4 +1,5 @@
 """Certbot HTTP-01 provisioning and restricted deploy hooks for RayZento."""
+from datetime import datetime, timezone
 import ipaddress
 import json
 import os
@@ -6,10 +7,12 @@ from pathlib import Path
 import re
 import shutil
 import socket
+import ssl
 import tempfile
 
 import rayzento_core as vps
 import rayzento_firewall as firewall
+import rayzento_terminal as terminal
 
 HOOK = Path("/etc/letsencrypt/renewal-hooks/deploy/80-rayzento")
 LE = Path("/etc/letsencrypt")
@@ -205,12 +208,51 @@ def renew(*, dry_run=False):
         if dry_run:
             command.append("--dry-run")
         vps.command(command, timeout=300)
-    print("证书续期检查完成。")
+    message = "模拟续期通过，现有证书未替换。" if dry_run else "已完成续期检查。到期的证书由续期服务处理。"
+    terminal.result("ok", message)
 
 
-def status():
-    for data in managed():
+def show_validity(hostname, cert, *, source):
+    dates = vps.command(["openssl", "x509", "-in", cert, "-noout", "-dates"]).stdout.decode()
+    fields = dict(line.split("=", 1) for line in dates.splitlines() if "=" in line)
+    now = datetime.now(timezone.utc)
+    start = datetime.fromtimestamp(ssl.cert_time_to_seconds(fields["notBefore"]), timezone.utc)
+    end = datetime.fromtimestamp(ssl.cert_time_to_seconds(fields["notAfter"]), timezone.utc)
+    if now < start:
+        kind, label = "warning", "尚未生效"
+    elif now >= end:
+        kind, label = "error", "已过期"
+    elif (end - now).days < 14:
+        kind, label = "warning", "即将到期"
+    else:
+        kind, label = "ok", "在有效期内"
+    print(f"  {hostname}  {terminal.badge(kind, label)}")
+    terminal.field("  来源", source)
+    terminal.field("  到期", end.strftime("%Y-%m-%d %H:%M UTC"))
+
+
+def status(*, summary=False, defaults=None):
+    records = managed()
+    if summary:
+        terminal.heading("证书与续期状态")
+    for data in records:
         cert = vps.ROOT / "certificates" / data["name"] / "fullchain.pem"
-        print(data["domain"])
-        print(vps.command(["openssl", "x509", "-in", cert, "-noout", "-subject", "-dates"]).stdout.decode())
-    print("certbot.timer " + vps.sysprop("certbot.timer", "ActiveState"))
+        if summary:
+            show_validity(data["domain"], cert, source="RayZento 自动申请")
+        else:
+            print(data["domain"])
+            print(vps.command(["openssl", "x509", "-in", cert, "-noout", "-subject", "-dates"]).stdout.decode())
+    if not summary:
+        print("certbot.timer " + vps.sysprop("certbot.timer", "ActiveState"))
+        return
+    if defaults and defaults.get("certificate") and all(
+        Path(defaults["certificate"]) != vps.ROOT / "certificates" / data["name"] / "fullchain.pem"
+        for data in records
+    ):
+        show_validity(defaults["sni"], Path(defaults["certificate"]), source="导入证书，由原工具续期")
+    elif not records:
+        terminal.result("info", "暂无证书。可自动申请或导入已有证书。")
+    if records:
+        timer = vps.sysprop("certbot.timer", "ActiveState")
+        kind, label = terminal.SERVICE_STATES.get(timer, ("warning", "状态未知"))
+        terminal.field("自动续期任务", terminal.badge(kind, label))

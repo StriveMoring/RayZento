@@ -12,6 +12,7 @@ import uuid
 
 import rayzento_core as vps
 import rayzento_compat as compatibility
+import rayzento_terminal as terminal
 
 MIB = 1024 * 1024
 RESERVE = 1024 * MIB
@@ -178,17 +179,18 @@ def build_plan(args):
 
 
 def print_plan(plan):
+    terminal.heading("优化预览 · 确认后才会应用")
     if plan["swap_mib"]:
         print(f"创建 {plan['swap_mib']} MiB Swap，加入 {FSTAB}")
     elif plan["reuse_swap"]:
         print("沿用已启用的 Swap")
     else:
         print("本次未选择创建 Swap")
+    labels = {SWAPPINESS: "交换倾向", BBR: "TCP 拥塞控制", QDISC: "默认队列"}
     for key, values in plan["runtime"].items():
-        print(f"{key}: {values['before']} → {values['after']}")
+        terminal.field(labels[key], f"{values['before']} → {values['after']}")
     print(f"Journald 持久日志预算 {plan['journal_limit']}")
-    for path in plan["files"]:
-        print(f"持久化文件 {path}")
+    terminal.field("配置文件变更", f"{len(plan['files'])} 项，应用时会保留回退记录。")
 
 
 def guard_host():
@@ -277,7 +279,7 @@ def apply(args):
         print_plan(plan)
         if not plan["files"] and all(v["before"] == v["after"] for v in plan["runtime"].values()):
             check_journal(plan["journal_limit"])
-            print("当前状态已符合所选设置。")
+            terminal.result("info", "当前已符合所选设置，无需改动。")
             return
         folder = vps.ROOT / f"tune-{time.time_ns():019d}-{uuid.uuid4().hex[:8]}"
         folder.mkdir(mode=0o700)
@@ -308,12 +310,12 @@ def apply(args):
                 restart_journal()
             plan["state"] = "applied"
             vps.atomic_json(record, plan)
-            print("已应用并检查当前状态。下次重启后运行 sudo rayzento tune verify --after-reboot。")
+            terminal.result("ok", "优化已应用，当前设置已检查。重启后可在小内存优化菜单再次验证。")
         except BaseException:
             try:
                 restore(record, plan)
             except (OSError, vps.Failure, ValueError) as error:
-                print(f"回退未完成：{error}。记录 {folder.name}")
+                terminal.result("error", f"回退未完成，已保留记录 {folder.name}。{error}")
             raise
 
 
@@ -327,7 +329,31 @@ def rollback(transaction):
         if transaction and record.parent.name != transaction:
             raise vps.Failure(f"请先回退较新的记录 {record.parent.name}。")
         restore(record, plan)
-        print(f"已恢复 {record.parent.name} 的原配置和可回退的运行值。")
+        terminal.result("ok", "已恢复优化前的文件和可回退的运行设置。")
+
+
+def status_summary():
+    terminal.heading("VPS 资源与调优状态")
+    metrics = {}
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        key, _, value = line.partition(":")
+        if key in ("MemTotal", "MemAvailable", "SwapTotal", "SwapFree"):
+            metrics[key] = int(value.split()[0]) / 1024
+    terminal.field("内存", f"可用 {metrics['MemAvailable']:.0f} / {metrics['MemTotal']:.0f} MiB")
+    swaps = active_swap()
+    if swaps:
+        used = metrics["SwapTotal"] - metrics["SwapFree"]
+        terminal.field("交换空间", f"已用 {used:.0f} / {metrics['SwapTotal']:.0f} MiB")
+        terminal.field("活动交换设备", "、".join(swaps))
+    else:
+        terminal.field("交换空间", "未启用")
+    terminal.field("根分区可用", f"{shutil.disk_usage('/').free / 1024**3:.1f} GiB")
+    options = journal_options()
+    terminal.field("持久日志容量上限", options.get("SystemMaxUse", "系统默认"))
+    terminal.field("交换倾向", kernel(SWAPPINESS))
+    terminal.field("TCP 拥塞控制", kernel(BBR))
+    terminal.field("默认队列", kernel(QDISC))
+    terminal.result("info", "需要核对日志实际用量或网卡当前队列时，可运行 rayzento tune status 查看详情。")
 
 
 def status():
@@ -366,7 +392,8 @@ def verify(after_reboot):
         raise vps.Failure("当前内核未提供可用的 BBR。")
     check_journal(plans[0]["journal_limit"])
     vps.command(["systemctl", "is-active", "--quiet", "systemd-journald.service"])
-    print("优化配置和当前运行值检查通过。")
+    subject = "重启后的设置" if after_reboot else "已保存配置及当前运行值"
+    terminal.result("ok", f"{subject}检查通过。")
 
 
 def bounded(value, low, high):
@@ -378,7 +405,8 @@ def bounded(value, low, high):
 
 def add_commands(parser):
     actions = parser.add_subparsers(dest="tune_action", required=True)
-    actions.add_parser("status", help="查看内存、Swap、根分区、Journal 和实际 BBR/qdisc")
+    status_op = actions.add_parser("status", help="查看内存、Swap、根分区、Journal 和实际 BBR/qdisc")
+    status_op.add_argument("--summary", action="store_true", help="显示中文摘要")
     for name, help_text in (("plan", "只读预览"), ("apply", "应用并保存回退记录")):
         sub = actions.add_parser(name, help=help_text)
         sub.add_argument("--swap-mib", type=lambda s: bounded(s, 0, 4096), default=1024, help="默认 1024，0 表示跳过创建")
@@ -390,6 +418,7 @@ def add_commands(parser):
     check.add_argument("--after-reboot", action="store_true", help="要求最后一次应用后已重启")
     oom = actions.add_parser("oom", help="查询内核 OOM 日志")
     oom.add_argument("--previous", action="store_true", help="查看上一次启动")
+    oom.add_argument("--summary", action="store_true", help="显示中文结果及原始日志")
     vacuum = actions.add_parser("vacuum", help="永久清理归档 Journal")
     vacuum.add_argument("--mib", type=lambda s: bounded(s, 16, 1024), default=100)
     vacuum.add_argument("--rotate", action="store_true", help="先轮转，使此前的活动日志也可进入清理范围")
@@ -398,7 +427,7 @@ def add_commands(parser):
 def run(args):
     action = args.tune_action
     if action == "status":
-        status()
+        (status_summary if args.summary else status)()
     elif action == "plan":
         guard_host()
         print_plan(build_plan(args))
@@ -412,15 +441,24 @@ def run(args):
         p = vps.command(["journalctl", "-k", "-b", "-1" if args.previous else "0",
                          "--no-pager", "--case-sensitive=no", "--grep=oom|out of memory|killed process", "-n", "100"],
                         check=False)
-        print(p.stdout.decode(errors="replace").strip() or "该启动记录没有匹配的 OOM 日志。")
-        if p.stderr:
-            print(p.stderr.decode(errors="replace").strip())
+        lines = p.stdout.decode(errors="replace").strip()
         if p.returncode not in (0, 1):
             raise vps.Failure("读取内核日志失败。")
+        if args.summary:
+            if lines:
+                terminal.result("warning", "找到内存耗尽相关记录，详见下方内核日志。")
+            elif p.stderr:
+                terminal.result("warning", "本次无法完整查询该次开机的日志。")
+            else:
+                terminal.result("info", "未找到匹配的内存耗尽记录。")
+        if lines or not args.summary:
+            print(lines or "该启动记录没有匹配的 OOM 日志。")
+        if p.stderr:
+            print(p.stderr.decode(errors="replace").strip())
     else:
         with vps.lock():
             cmd = ["journalctl", f"--vacuum-size={args.mib}M"]
             if args.rotate:
                 cmd.append("--rotate")
             vps.command(cmd, timeout=90)
-            print(output(["journalctl", "--disk-usage"]))
+            terminal.result("ok", f"归档日志清理已执行，目标上限 {args.mib} MiB。活动日志仍保留。")

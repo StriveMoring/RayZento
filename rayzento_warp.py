@@ -634,8 +634,10 @@ def run(action, *, accept_terms=False, imported=None):
             elif action == 'monitor':
                 monitor(state, folder)
             elif action == 'watch-log':
-                print(vps.command(['/usr/bin/journalctl', '-u', MONITOR_UNIT, '-n', '25',
-                                   '--no-pager', '-o', 'short-iso']).stdout.decode(errors='replace'))
+                logs = vps.command(['/usr/bin/journalctl', '-u', MONITOR_UNIT, '-n', '25',
+                                    '--no-pager', '-o', 'short-iso']).stdout.decode(errors='replace')
+                terminal.heading('WARP 定时恢复 · 最近 25 条日志')
+                print(logs.rstrip() or '暂无检查记录。')
             elif not state:
                 if action == 'watch-on':
                     raise vps.Failure('先开启并验收 WARP，再打开定时恢复。')

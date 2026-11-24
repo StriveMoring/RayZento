@@ -31,7 +31,7 @@ import rayzento_terminal as terminal
 ROOT = Path("/var/lib/rayzento")
 OPT = Path("/opt/rayzento")
 UNITS = Path("/etc/systemd/system")
-VERSION = "2.4.2"
+VERSION = "2.4.3"
 SPECS = {
     "xray": ("XTLS/Xray-core", "rayzento-xray.service"),
     "sing-box": ("SagerNet/sing-box", "rayzento-sing-box.service"),
@@ -541,7 +541,7 @@ def apply(targets, reality_ready, latest=()):
                                 "old": svc.old, "target": tag, "before_sha": original,
                                 "after_sha": candidate, "config_sha256": saved,
                                 "release": release_record(key, tag, digest, candidate)})
-                print(f"{key} {svc.old} → {tag}：官方指纹、实际配置校验、旧版备份均通过。", flush=True)
+                terminal.result("info", f"{key} {svc.old} → {tag}，发布文件、配置和备份均已核对。")
             manifest["state"] = "ready"
             atomic_json(tx / "manifest.json", manifest)
             for (svc, _), rec in zip(selected, records):
@@ -566,7 +566,9 @@ def apply(targets, reality_ready, latest=()):
                         errors.append(f"{rec['core']}: {e}")
                 manifest["state"] = "rollback-incomplete" if errors else "rolled-back"
                 atomic_json(tx / "manifest.json", manifest)
-                print("自动回滚：" + ("；".join(errors) if errors else "已恢复本次替换的核心。"), file=sys.stderr)
+                terminal.result("error" if errors else "warning",
+                                "自动恢复未完成：" + "；".join(errors) if errors else "升级未完成，已恢复旧核心。",
+                                stream=sys.stderr)
             raise
         finally:
             for p in stages.values():
@@ -614,12 +616,14 @@ def main(argv=None):
     sub.add_parser("doctor", help="只读检查系统、VPS 环境和功能兼容性")
     registration = sub.add_parser("register", help="安装或更新系统管理命令")
     registration.add_argument("--yes", action="store_true", help="直接注册当前发布文件")
-    sub.add_parser("profiles", help="列出协议和安装预设")
+    profiles = sub.add_parser("profiles", help="列出协议和安装预设")
+    profiles.add_argument("--summary", action="store_true", help="显示分组安装说明")
     provision.add_install_options(sub.add_parser("install", help="从官方正式版创建并安装新节点"))
     activation = sub.add_parser("activate", help="启用已经校验的安装候选")
     activation.add_argument("candidate", metavar="FRESH-ID")
     activation.add_argument("--reality-client-ready", action="store_true")
-    sub.add_parser("releases", help="只查询官方最新正式版；不会更新")
+    releases = sub.add_parser("releases", help="只查询官方最新正式版；不会更新")
+    releases.add_argument("--summary", action="store_true", help="显示版本摘要")
     audit = sub.add_parser("audit", help="只读取此 VPS 的服务归属和端口")
     audit.add_argument("--reality", action="store_true", help="脱敏检查 REALITY 目标、TLS 回落和近期错误，不修改服务")
     audit.add_argument("--summary", action="store_true", help="显示中文状态摘要")
@@ -637,6 +641,8 @@ def main(argv=None):
     tuning.add_commands(sub.add_parser("tune", help="管理 Swap、Journald 和 BBR/FQ"))
     for name in ("plan", "upgrade"):
         a = sub.add_parser(name, help="核对目标版本" if name == "plan" else "校验、备份和替换指定核心")
+        if name == "plan":
+            a.add_argument("--summary", action="store_true", help="显示升级预览摘要")
         for c in SPECS:
             a.add_argument(f"--{c}-version", dest=c, type=version)
         a.add_argument("--latest", nargs="+", choices=tuple(SPECS), default=(),
@@ -661,15 +667,30 @@ def main(argv=None):
         menu.register_command(confirmed=args.yes)
         return
     if args.action == "profiles":
+        if args.summary:
+            terminal.heading("安装组合")
+            terminal.field("最小组合", "Xray VLESS TCP REALITY，需要公网 IPv4。")
+            terminal.field("标准组合", "Xray REALITY、AnyTLS、TUIC。TLS 节点需要证书。")
+            terminal.field("完整组合", "10 种入站，导出 11 条节点（含 Naive H2/H3）。")
+            terminal.heading("支持的协议")
+            for name in provision.PROFILE_ORDER:
+                core, title, transport = provision.NAMES[name]
+                terminal.field(title, f"{core} · {'/'.join(transport).upper()}")
+            return
         for name, (core, title, transport) in provision.NAMES.items():
             print(f"{name:20} {core:9} {'/'.join(transport):7} {title}")
         for preset, names in provision.PRESETS.items():
             print(f"{preset}: {', '.join(names)}")
         return
     if args.action == "releases":
+        if args.summary:
+            terminal.heading("官方正式版 · 仅查询")
         for c in ORDER:
             obj = release(c)
-            print(f"{c}: {obj['tag_name']} {obj['html_url']}")
+            if args.summary:
+                terminal.field(c, obj["tag_name"])
+            else:
+                print(f"{c}: {obj['tag_name']} {obj['html_url']}")
         return
     host_check()
     if args.action == "warp":
@@ -709,7 +730,7 @@ def main(argv=None):
     if args.action == "audit":
         if args.reality:
             import rayzento_diagnostics
-            rayzento_diagnostics.reality()
+            rayzento_diagnostics.reality(summary=args.summary)
             return
         unsupported = False
         for c in ORDER:
@@ -741,13 +762,18 @@ def main(argv=None):
     if args.action == "upgrade":
         apply(targets, args.reality_client_ready, args.latest)
     else:
+        if args.summary:
+            terminal.heading("核心升级预览")
         for c in ORDER:
             if c in targets:
                 s = inspect(c)
                 obj = release(c, targets[c])
                 a = release_asset(c, obj, arch())
-                print(f"{c}: {s.old} → {targets[c]} | {a['name']} {a['digest']}")
-                print(f"  单元 {s.unit}；监听：{', '.join(s.ports)}")
+                if args.summary:
+                    terminal.field(c, f"{s.old} → {targets[c]}" if s.old != targets[c] else f"{s.old} 已是所选版本")
+                else:
+                    print(f"{c}: {s.old} → {targets[c]} | {a['name']} {a['digest']}")
+                    print(f"  单元 {s.unit}；监听：{', '.join(s.ports)}")
                 if requires_reality_preflight(s, targets[c]):
                     print("  REALITY：需先完成 Chrome + ML-KEM 客户端预检。")
 

@@ -6,6 +6,8 @@ import shutil
 import subprocess
 import sys
 
+import rayzento_terminal as terminal
+
 
 SUPPORTED = {"debian": ("12", "13"), "ubuntu": ("22.04", "24.04", "26.04")}
 SUPPORT_TEXT = "Debian 12/13、Ubuntu 22.04/24.04/26.04 LTS"
@@ -77,6 +79,7 @@ def report():
     print(f"systemd 作为 PID 1 {'是' if host.systemd else '否'}")
     problems = host.problems()
     if problems:
+        terminal.result("error", "当前 VPS 未满足安装条件。")
         for problem in problems:
             print(f"  - {problem}")
         return False
@@ -85,16 +88,16 @@ def report():
     kind = virt.stdout.strip() if virt is not None and virt.returncode in (0, 1) else ""
     container = container_status()
     print(f"虚拟化 {'未检测到虚拟化' if kind == 'none' else kind or '未知'}")
-    print("基础系统通过。核心安装时还会试运行对应的官方二进制。")
+    terminal.result("ok", "基础系统检查通过。核心安装时会再检查实际二进制。")
     missing = [name for name in ("systemctl", "ss", "openssl", "sysctl", "modprobe", "swapon") if not shutil.which(name)]
     if missing:
-        print(f"缺少命令 {', '.join(missing)}。一键安装器可补齐发行版依赖。")
+        terminal.result("warning", f"缺少命令 {', '.join(missing)}，一键安装器可补齐依赖。")
     fs = probe("findmnt", "-n", "-o", "FSTYPE", "--target", "/")
     filesystem = fs.stdout.strip() if fs is not None and fs.returncode == 0 else "未知"
     print(f"根分区 {filesystem} · 可用 {shutil.disk_usage('/').free / 1024**3:.1f} GiB")
     ipv4 = probe("ip", "-4", "-o", "address", "show", "scope", "global")
     if ipv4 is not None and ipv4.returncode == 0 and not ipv4.stdout.strip():
-        print("未检测到全局范围的 IPv4 地址，默认节点需要可用的 IPv4 入站。")
+        terminal.result("warning", "未检测到可用的全局范围 IPv4 地址，请核对 VPS 入站。")
     if container is not False:
         print("Swap 和 BBR 调优已限制。此环境为容器或无法确认虚拟化权限。")
     else:

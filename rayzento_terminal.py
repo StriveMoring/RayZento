@@ -36,3 +36,11 @@ def result(kind, message, *, stream=None):
 def service_status(state, startup):
     kind, label = SERVICE_STATES.get(state, ("warning", "状态未知"))
     return f"{badge(kind, label)} · 开机自启{STARTUP_STATES.get(startup, '状态未知')}"
+
+
+def heading(title):
+    print(f"\n{color(title, 'heading')}", flush=True)
+
+
+def field(label, value):
+    print(f"  {label}  {value}")

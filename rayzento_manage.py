@@ -63,7 +63,9 @@ def service(core, action):
                 raise vps.Failure("该核心没有节点。")
             vps.command(["systemctl", action, svc.unit])
         elif action == "logs":
-            print(vps.command(["journalctl", "-u", svc.unit, "-n", "80", "--no-pager", "-o", "short-iso"]).stdout.decode(errors="replace"))
+            text = vps.command(["journalctl", "-u", svc.unit, "-n", "80", "--no-pager", "-o", "short-iso"]).stdout.decode(errors="replace")
+            terminal.heading(f"{core} · 最近服务日志")
+            print(text.rstrip() or "暂无日志记录。")
         else:
             raise vps.Failure("未知服务操作。")
         status = terminal.service_status(vps.sysprop(svc.unit, "ActiveState"), vps.sysprop(svc.unit, "UnitFileState"))
@@ -93,7 +95,9 @@ def list_backups():
         if data["state"] == "rolled-back":
             continue
         created = backup_time(folder.name)
-        rows.append((folder.name, f"{created.isoformat(timespec='seconds')} · {label} · {data['state']}"))
+        states = {"applied": "变更已生效", "pending": "变更未完成", "ready": "可恢复",
+                  "local-verified": "升级已验证", "rollback-incomplete": "恢复未完成"}
+        rows.append((folder.name, f"{created:%Y-%m-%d %H:%M UTC} · {label} · {states.get(data['state'], '状态待核对')}"))
     return sorted(rows, key=lambda row: backup_time(row[0]), reverse=True)
 
 
@@ -309,7 +313,6 @@ def rollback(txid):
             raise vps.Failure("备份核心名称不符。")
         restore(folder, data)
     nodes.export()
-    print("备份已恢复。")
 
 
 def remove_manager():
@@ -330,4 +333,4 @@ def remove_manager():
             hook.unlink()
         target.unlink()
         vps.syncdir(target.parent)
-    print(f"管理器已卸载。私有备份保留在 {vps.ROOT}，系统优化可用发布文件单独回退。")
+    terminal.result("ok", f"管理器已卸载。私有备份保留在 {vps.ROOT}，系统优化可用发布文件单独回退。")

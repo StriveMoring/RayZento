@@ -125,7 +125,7 @@ def server_address():
     try:
         return nodes.detect_address()
     except vps.Failure as error:
-        print(error)
+        terminal.result("warning", str(error))
         return nodes.public_host(required("VPS 公网入口 IPv4 或域名"))
 
 
@@ -137,7 +137,7 @@ def tls_details(server):
             provision.tls_check(cert, key, saved["sni"])
             return saved["sni"], cert, key
         except (vps.Failure, OSError, ValueError):
-            print("已保存证书未通过检查，重新选择证书。")
+            terminal.result("warning", "已保存的证书未通过检查，请重新选择证书。")
     existing = certificates.managed()
     if existing:
         hostname = existing[0]["domain"]
@@ -161,7 +161,8 @@ def install_selected(names, options):
     sni, cert, key = server, None, None
     if provision.TLS.intersection(selected):
         sni, cert, key = tls_details(server)
-    print("安装所选协议，自动生成凭据和空闲端口。REALITY 导出使用 Chrome，Xray 节点含 Mihomo ML-KEM 参数。")
+    names_to_install = "、".join(provision.NAMES[name][1] for name in selected)
+    terminal.result("info", f"正在安装 {names_to_install}，请稍候。")
     fresh = []
     for name in selected:
         core = provision.NAMES[name][0]
@@ -218,9 +219,9 @@ def install_nodes():
 def select_node():
     inventory = nodes.all_nodes()
     if not inventory:
-        print("当前没有节点。")
+        terminal.result("info", "当前没有可修改的节点。")
         return None
-    choice = choose("选择节点", [f"{n['profile']} · {n['client']['server']}:{n['client']['port']}" for n in inventory])
+    choice = choose("选择节点", [f"{n['client']['name']} · {n['client']['server']}:{n['client']['port']}" for n in inventory])
     return inventory[choice - 1] if choice else None
 
 
@@ -230,18 +231,22 @@ def edit_node(action):
     if node is None:
         return
     profile, client = node["profile"], node["client"]
+    title = client["name"]
     if action == "port":
         raw = defaults("新的监听端口", str(client["port"]))
         port = int(raw)
-        if confirm(f"将 {profile} 的端口改为 {port}，相关核心会重启"):
+        if confirm(f"将 {title} 的监听端口改为 {port}，相关核心可能短暂重启"):
             manage.change_node(profile, port=port)
+            terminal.result("ok", f"{title} 的监听端口已设为 {port}。可重新导入节点。")
     elif action == "endpoint":
         server = defaults("客户端公网入口 IPv4 或域名", client["server"])
         port = int(defaults("客户端公网端口，NAT 映射时填外部端口", str(client["port"])))
         if confirm("更新该节点客户端入口"):
             manage.change_node(profile, server=server, client_port=port)
-    elif action == "delete" and confirm(f"永久删除有效节点 {profile}，保留私有回退备份"):
+            terminal.result("ok", f"{title} 的客户端入口已设为 {server}:{port}。")
+    elif action == "delete" and confirm(f"删除节点 {title}，保留私有回退备份"):
         manage.change_node(profile, delete=True)
+        terminal.result("ok", f"{title} 已删除。需要恢复时可到「备份与恢复」。")
 
 
 def node_menu():
@@ -249,7 +254,7 @@ def node_menu():
         ("查看全部节点链接", lambda: execute(["nodes", "show"])),
         ("导出客户端配置", lambda: execute(["nodes", "export"])),
         ("安装或添加节点", install_nodes),
-        ("查看有哪些协议和安装组合", lambda: execute(["profiles"])),
+        ("查看有哪些协议和安装组合", lambda: execute(["profiles", "--summary"])),
     )), ("修改已有节点", (
         ("修改服务端监听端口", lambda: edit_node("port")),
         ("修改客户端连接地址或端口", lambda: edit_node("endpoint")),
@@ -294,19 +299,24 @@ def upgrade_cores():
     if not choice:
         return
     targets = cores if choice == len(cores) + 1 else [cores[choice - 1]]
-    pins, needs_reality = [], False
+    pins, needs_reality, changes = [], False, False
     for core in targets:
         service = vps.inspect(core)
         tag = vps.version(vps.release(core)["tag_name"])
-        if vps.tag_numbers(tag) < vps.tag_numbers(service.old):
+        current, candidate = vps.tag_numbers(service.old), vps.tag_numbers(tag)
+        if candidate < current:
             raise vps.Failure(f"{core} 的官方正式版低于当前版本。")
         pins += [f"--{core}-version", tag]
-        needs_reality |= tag != service.old and vps.requires_reality_preflight(service, tag)
-    execute(["plan", *pins])
+        changes |= candidate != current
+        needs_reality |= candidate != current and vps.requires_reality_preflight(service, tag)
+    execute(["plan", "--summary", *pins])
+    if not changes:
+        terminal.result("info", "所选核心都已是最新正式版，无需重启。")
+        return
     if not confirm("确认升级，相关核心会短暂重启"):
         return
     if needs_reality:
-        print("新 Xray REALITY 节点需核对 Chrome 和 ML-KEM。")
+        terminal.result("warning", "新 Xray REALITY 节点需先核对客户端的 Chrome 指纹和 ML-KEM 支持。")
         if not confirm("确认已核对现有客户端"):
             return
         pins.append("--reality-client-ready")
@@ -317,14 +327,14 @@ def core_menu():
     return menu("代理核心", ("查看与排查", (
         ("查看核心和监听端口状态", lambda: execute(["audit", "--summary"])),
         ("查看核心最近日志", lambda: service_action("logs")),
-        ("诊断 REALITY 连接", lambda: execute(["audit", "--reality"])),
+        ("诊断 REALITY 连接", lambda: execute(["audit", "--reality", "--summary"])),
     )), ("服务操作", (
         ("重启核心", lambda: service_action("restart")),
         ("启动核心", lambda: service_action("start")),
         ("停止核心", lambda: service_action("stop")),
         ("设置开机自启", startup_menu),
     )), ("核心版本", (
-        ("查看官方正式版", lambda: execute(["releases"])),
+        ("查看官方正式版", lambda: execute(["releases", "--summary"])),
         ("预览并升级核心", upgrade_cores),
     )))
 
@@ -332,7 +342,7 @@ def core_menu():
 def tune_apply():
     vps.host_check()
     args = ["--swap-mib", defaults("Swap MiB，0 跳过创建", "1024"),
-            "--swappiness", defaults("swappiness", "20"),
+            "--swappiness", defaults("交换倾向，默认 20", "20"),
             "--journal-mib", defaults("持久日志预算 MiB", "100")]
     if confirm("同时启用 BBR + FQ"):
         args.append("--bbr")
@@ -350,7 +360,7 @@ def vacuum():
 
 def tune_menu():
     return menu("VPS › 小内存优化", (None, (
-        ("查看内存、Swap、日志和 BBR 状态", lambda: execute(["tune", "status"])),
+        ("查看内存、交换空间、日志与网络调优", lambda: execute(["tune", "status", "--summary"])),
         ("预览并应用优化", tune_apply),
         ("验证当前设置", lambda: execute(["tune", "verify"])),
         ("验证重启后设置", lambda: execute(["tune", "verify", "--after-reboot"])),
@@ -362,7 +372,7 @@ def tune_menu():
 def vps_menu():
     return menu("VPS 检查与优化", (None, (
         ("检查 VPS 兼容性", lambda: execute(["doctor"])),
-        ("查看上次开机的内存不足记录（OOM）", lambda: execute(["tune", "oom", "--previous"])),
+        ("查看上次开机的内存不足记录（OOM）", lambda: execute(["tune", "oom", "--previous", "--summary"])),
         ("小内存优化 · Swap、日志、BBR", tune_menu),
     )))
 
@@ -371,11 +381,12 @@ def rollback_menu():
     vps.host_check()
     entries = manage.list_backups()
     if not entries:
-        print("当前没有可回退备份。")
+        terminal.result("info", "当前没有可恢复的节点或核心备份。")
         return
     choice = choose("选择备份，优先回退较新的变更", [label for _, label in entries])
     if choice and confirm("确认恢复所选备份，相关核心可能短暂重启"):
         manage.rollback(entries[choice - 1][0])
+        terminal.result("ok", "所选备份已恢复。可以到对应菜单查看当前状态。")
 
 
 def import_certificate():
@@ -386,7 +397,7 @@ def import_certificate():
     key = Path(required("私钥文件绝对路径")).resolve(strict=True)
     provision.tls_check(cert, key, hostname)
     save_settings({"server": server, "sni": hostname, "certificate": str(cert), "key": str(key)})
-    print("证书已作为后续安装默认值。自有证书由原签发工具续期。")
+    terminal.result("ok", f"{hostname} 的证书已导入，后续安装会使用它。续期由原工具负责。")
 
 
 def issue_certificate():
@@ -396,11 +407,17 @@ def issue_certificate():
         server = server_address()
         cert, key = certificates.issue(hostname, server)
         save_settings({"server": server, "sni": hostname, "certificate": str(cert), "key": str(key)})
+        terminal.result("ok", f"{hostname} 的证书已就绪并设为安装默认值。")
+
+
+def certificate_status():
+    vps.host_check()
+    certificates.status(summary=True, defaults=settings())
 
 
 def certificate_menu():
     return menu("证书", (None, (
-        ("查看证书有效期与续期任务", lambda: execute(["certificate", "status"])),
+        ("查看证书有效期与续期任务", certificate_status),
         ("自动申请 Let's Encrypt 证书", issue_certificate),
         ("导入已有证书", import_certificate),
         ("检查并执行续期", lambda: execute(["certificate", "renew"])),
@@ -411,6 +428,9 @@ def certificate_menu():
 def update_manager():
     vps.host_check()
     candidate = updates.preview()
+    if vps.tag_numbers(candidate[1]) <= vps.tag_numbers(vps.VERSION):
+        terminal.result("info", "当前 RayZento 已是相同或更高版本。")
+        return
     if confirm("确认下载并更新 RayZento 管理脚本") and updates.update(candidate):
         return Navigation.EXIT
 
@@ -438,11 +458,16 @@ def uninstall():
             manage.remove_manager()
             return Navigation.EXIT
         return
-    if choice and confirm("确认停止并卸载所选核心，客户端连接会中断"):
+    if not choice:
+        return
+    if not cores:
+        terminal.result("info", "当前没有要卸载的核心或节点。")
+        return
+    if confirm("确认停止并卸载所选核心，客户端连接会中断"):
         selected = cores if choice == len(cores) + 1 else [cores[choice - 1]]
         for core in selected:
             manage.remove_core(core)
-        print("所选核心已卸载。可在「备份与恢复」查看回退记录。")
+        terminal.result("ok", f"{'、'.join(selected)} 已卸载。备份保留在「备份与恢复」。")
 
 def register_command(*, confirmed=False):
     vps.host_check()
@@ -463,7 +488,7 @@ def register_command(*, confirmed=False):
         except zipfile.BadZipFile:
             raise vps.Failure("已存在同名命令，无法确认是 RayZento。") from None
         if source == target:
-            print(f"管理命令已注册在 {target}。")
+            terminal.result("info", "管理命令已注册，无需重复设置。")
             return
     if not confirmed and not confirm(f"注册管理命令到 {target}"):
         return
@@ -480,7 +505,7 @@ def register_command(*, confirmed=False):
             vps.syncdir(target.parent)
         finally:
             staged.unlink(missing_ok=True)
-    print("管理命令已注册。以后运行 sudo rayzento。")
+    terminal.result("ok", "管理命令已注册。以后运行 rayzento，普通用户加 sudo。")
 
 def warp_menu():
     def enable_warp():

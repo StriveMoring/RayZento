@@ -7,6 +7,7 @@ import json
 from urllib.parse import quote, urlencode, urlsplit
 
 import rayzento_core as vps
+import rayzento_terminal as terminal
 
 
 def ordered(nodes):
@@ -152,18 +153,25 @@ def export(nodes=None, *, locked=False):
                    "proxy-groups": [{"name": "RayZento", "type": "select", "proxies": names or ["DIRECT"]}],
                    "rules": ["MATCH,RayZento"]}
         vps.atomic_json(folder / "mihomo-profile.yaml", profile)
-        print(f"导出目录 {folder}，包含节点凭据，仅 root 可读。")
+        terminal.result("ok", f"已导出 {len(nodes)} 条节点到 {folder}。")
+        terminal.field("通用链接", "all-links.txt")
+        terminal.field("v2rayN VLESS", "v2rayn-vless.txt")
+        terminal.field("Mihomo", "mihomo-profile.yaml（完整配置）或 mihomo-proxies.yaml（仅节点）")
+        terminal.field("完整参数", "all-nodes.json")
+        terminal.result("warning", "导出文件含登录凭据，请通过私有渠道传输。")
         return folder
 
 
 def display(nodes=None):
     nodes = client_nodes(all_nodes() if nodes is None else nodes)
+    if not nodes:
+        terminal.result("info", "当前没有节点。可以在「节点 → 安装或添加节点」创建。")
+        return
+    terminal.heading(f"节点链接 · 共 {len(nodes)} 条")
+    terminal.result("warning", "链接包含登录凭据，请勿公开。")
     for node in nodes:
         c = node["client"]
-        print(f"\n{node['profile']} · {c['name']} · {c['server']}:{c['port']}")
-        uri = link(node)
-        print(uri)
-        if node["profile"] in ("anytls-reality", "naive"):
-            print("该协议的分享 URI 各客户端实现不同，优先参照导出 JSON 的完整参数。")
-    if not nodes:
-        print("当前没有已安装节点。")
+        print(f"\n{terminal.color(c['name'], 'heading')}  {c['server']}:{c['port']}")
+        print(link(node))
+    if any(node["profile"] in ("anytls-reality", "naive") for node in nodes):
+        terminal.result("info", "Naive 或 AnyTLS REALITY 链接若无法导入，请用导出的 JSON 核对客户端参数。")

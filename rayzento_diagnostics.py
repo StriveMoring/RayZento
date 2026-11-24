@@ -8,6 +8,7 @@ import ssl
 from urllib.parse import urlsplit
 
 import rayzento_core as vps
+import rayzento_terminal as terminal
 
 SENSITIVE = {"id", "uuid", "username", "password", "token", "secret", "privatekey", "publickey", "shortid", "shortids", "decryption", "encryption"}
 
@@ -81,7 +82,7 @@ def entries(core, config):
                "port": port, "target": parsed.hostname, "target_port": parsed.port or 443, "sni": names[0]}
 
 
-def reality():
+def reality(*, summary=False):
     report = {"utc": datetime.datetime.now(datetime.timezone.utc).isoformat(), "read_only": True, "cores": []}
     configs, secrets = {}, []
     for core in vps.ORDER:
@@ -121,4 +122,26 @@ def reality():
                     if re.search(r"error|fail|reject|reality|tls|handshake|timeout", line, re.I)]
         row["recent_errors"] = [redact(line, secrets)[:400] for line in relevant[-16:]]
         report["cores"].append(row)
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    if not summary:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return
+    terminal.heading("REALITY 连接诊断")
+    if not report["cores"]:
+        terminal.result("info", "没有已配置的 REALITY 节点。")
+        return
+    for row in report["cores"]:
+        state, label = terminal.SERVICE_STATES.get(row["active"], ("warning", "状态未知"))
+        print(f"  {row['core']}  {terminal.badge(state, label)}")
+        for node in row["nodes"]:
+            target = node["target_check"]
+            target_ok = target.get("ipv4_tls", target).get("ok")
+            fallback = node["local_normal_tls_fallback"]
+            print(f"    {node['profile']} · 监听端口 {node['port']}")
+            terminal.field("    目标站 TLS", terminal.badge("ok" if target_ok else "error", "通过" if target_ok else "失败"))
+            if "skipped" in fallback:
+                terminal.field("    本机 TLS 回落", terminal.badge("warning", "跳过，监听地址不适合回环测试"))
+            else:
+                passed = fallback.get("ok")
+                terminal.field("    本机 TLS 回落", terminal.badge("ok" if passed else "error", "通过" if passed else "失败"))
+        terminal.field("  近期相关日志", f"{len(row['recent_errors'])} 条")
+    terminal.result("info", "以上为服务器端诊断。真实客户端连接需另行验证。脱敏详情可运行 rayzento audit --reality。")
