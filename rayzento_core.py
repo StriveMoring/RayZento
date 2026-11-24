@@ -30,7 +30,7 @@ import rayzento_compat as compatibility
 ROOT = Path("/var/lib/rayzento")
 OPT = Path("/opt/rayzento")
 UNITS = Path("/etc/systemd/system")
-VERSION = "2.4.0"
+VERSION = "2.4.1"
 SPECS = {
     "xray": ("XTLS/Xray-core", "rayzento-xray.service"),
     "sing-box": ("SagerNet/sing-box", "rayzento-sing-box.service"),
@@ -273,6 +273,16 @@ def listeners(pid):
     return sorted({f"{z[0]} {z[4]}" for ln in p.splitlines() if match.search(ln) and len(z := ln.split()) >= 6})
 
 
+def missing_listeners(expected, observed):
+    # ss renders a dual-stack wildcard as * and an IPv6-only wildcard as [::].
+    available = set()
+    for listener in observed:
+        available.add(listener)
+        if " *:" in listener:
+            available.add(listener.replace(" *:", " 0.0.0.0:", 1))
+    return sorted(set(expected) - available)
+
+
 def version_banner(exe, core=None):
     name = core or exe.name
     result = command([exe, "-v" if name == "mihomo" else "version"], check=False)
@@ -402,7 +412,12 @@ def running_match(unit, exe, expected_ports, expect_sha):
         return False
     p = Path(f"/proc/{pid}/exe")
     try:
-        return p.resolve(strict=True) == exe and os.path.samestat(p.stat(), exe.stat()) and sha(exe) == expect_sha and set(expected_ports) <= set(listeners(pid))
+        return (
+            p.resolve(strict=True) == exe
+            and os.path.samestat(p.stat(), exe.stat())
+            and sha(exe) == expect_sha
+            and not missing_listeners(expected_ports, listeners(pid))
+        )
     except OSError:
         return False
 
@@ -416,7 +431,13 @@ def boot(unit, exe, expected_ports, expect_sha):
         if good >= 2:
             return
         time.sleep(1)
-    raise Failure(f"{unit} 未恢复原监听或未运行指定版本。")
+    state = sysprop(unit, "ActiveState")
+    pid = int(sysprop(unit, "MainPID") or "0")
+    missing = missing_listeners(expected_ports, listeners(pid) if pid > 1 else ())
+    detail = f"状态 {state}"
+    if missing:
+        detail += f"，缺少监听 {', '.join(missing)}"
+    raise Failure(f"{unit} 未通过启动检查（{detail}）。")
 
 
 def restore(record, tx):
